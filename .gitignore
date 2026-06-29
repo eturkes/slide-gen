@@ -1,0 +1,14 @@
+# Claude Code — track shared settings.json, ignore machine-local override
+.claude/settings.local.json
+
+# Python / uv (per-layer envs)
+.venv/
+.venv-host/
+__pycache__/
+*.py[cod]
+
+# Node / pnpm
+node_modules/
+
+# direnv
+.direnv/

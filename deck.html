@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>slide deck template — JA / EN</title>
+<!--
+  Bilingual slide template — JA term + furigana + EN gloss, warm-accent academic style.
+  Each <section class="slide"> = one 2560×1440px slide; page count = section count.
+  Render (intended): headless Chromium full-page screenshot → slice into 2560×1440 pages
+    → PDF at 72 dpi (1px == 1pt). Needs Noto Sans CJK JP installed (else JA → tofu).
+
+  Slots per slide:
+    .eyebrow → NN counter + 「JA見出し · en label」
+    .entry   → 3 tiers: .jp (bold JA term) · .jpf (same JA, 漢字 as <ruby>漢字<rt>かな</rt></ruby>) · .en (EN gloss; <b>…</b> lead-in)
+    figure   → .col-fig (landscape) | .col-fig.tall (portrait); swap the .fig-ph box for <img src="assets/…">
+    .cap     → caption (<b>lead.</b> detail)
+    .pageno  → 「project · n / N」
+    inline   → <code>mono</code> · <span class="accent">accent</span> · <b> within .en
+  .jp and .jpf carry the SAME JA text — one bold/clean, one furigana-annotated.
+-->
+<style>
+:root{
+  --w:2560px; --h:1440px; --mx:160px;
+  --ink:#1a1a1a; --sub:#3a3a3a; --muted:#8c8c8c; --faint:#c6c6c6;
+  --accent:#b0533a; --rule:#1a1a1a; --line:#e3e3e3;
+  --fs:42px; --fs-en:33px; --rt:0.46em;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:#fff}
+body{
+  font-family:'Noto Sans','Noto Sans CJK JP',sans-serif;
+  color:var(--ink); -webkit-font-smoothing:antialiased;
+  text-rendering:geometricPrecision; font-feature-settings:"palt" 1;
+}
+code{font-family:'Noto Sans Mono','DejaVu Sans Mono',monospace;
+  font-size:0.88em; background:#f0efed; padding:1px 8px; border-radius:5px}
+
+.slide{position:relative; width:var(--w); height:var(--h); overflow:hidden;
+  padding:180px var(--mx) 110px; display:flex; flex-direction:column;
+  justify-content:center}
+.eyebrow{position:absolute; top:96px; left:var(--mx); right:var(--mx);
+  font-size:22px; letter-spacing:0.30em; color:var(--muted); font-weight:600;
+  text-transform:uppercase; display:flex; align-items:center; gap:20px}
+.eyebrow .n{color:var(--accent); font-weight:800}
+.eyebrow::after{content:""; flex:1; height:1px; background:var(--line)}
+.pageno{position:absolute; bottom:74px; right:var(--mx); font-size:20px;
+  color:var(--faint); letter-spacing:0.12em}
+
+ruby{ruby-align:center}
+rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
+  letter-spacing:0; user-select:none}
+
+/* ---- three-tier entry (term / furigana / english) ---- */
+.entry{position:relative; padding-left:46px}
+.entry + .entry{margin-top:38px}
+.entry::before{content:""; position:absolute; left:0; top:9px; width:7px;
+  height:1.05em; background:var(--rule)}
+.jp{font-size:var(--fs); font-weight:800; line-height:1.42; letter-spacing:0.01em}
+.jpf{font-size:var(--fs); font-weight:400; line-height:1.95; margin-top:2px;
+  color:var(--sub)}
+.en{font-size:var(--fs-en); font-weight:400; line-height:1.4; margin-top:13px;
+  color:var(--sub)}
+.en b{font-weight:800; color:var(--ink)}
+.accent{color:var(--accent)}
+
+/* ---- two-column figure slides ---- */
+.cols{display:flex; gap:80px; align-items:center; width:100%}
+.col-text{flex:0 0 46%}
+.col-text .jp,.col-text .jpf{font-size:37px}
+.col-text .jpf{line-height:1.82}
+.col-text .en{font-size:29px}
+.col-text .entry + .entry{margin-top:30px}
+.col-fig{flex:1; display:flex; flex-direction:column; align-items:center}
+.col-fig img{width:100%; max-width:1060px; display:block}
+.cap{font-size:21px; color:var(--muted); margin-top:18px; line-height:1.4;
+  max-width:1020px; text-align:left}
+.cap b{color:var(--sub); font-weight:700}
+/* portrait figure variant: constrain by height, frame the image */
+.col-fig.tall img{width:auto; max-width:100%; max-height:1000px;
+  border-radius:8px; border:1px solid #d6d6d6}
+.col-fig.tall .cap{max-width:560px; text-align:center}
+
+/* ---- figure placeholder (self-contained; swap .fig-ph for <img src=…> per project) ---- */
+.fig-ph{width:100%; max-width:1060px; aspect-ratio:16/10; display:flex;
+  align-items:center; justify-content:center; background:#f4f3f1;
+  border:1px dashed #d0cfcc; border-radius:8px; color:var(--faint);
+  font-size:24px; letter-spacing:0.18em; text-transform:uppercase}
+.col-fig.tall .fig-ph{width:auto; height:1000px; aspect-ratio:3/4; max-width:100%;
+  border-style:solid; border-color:#d6d6d6}
+</style>
+</head>
+<body>
+
+<!-- ============================ SLIDE 1 (portrait figure variant) ============================ -->
+<section class="slide">
+  <div class="eyebrow"><span class="n">01</span><span>セクション見出し &nbsp;·&nbsp; section label</span></div>
+  <div class="cols">
+    <div class="col-text">
+      <div class="entry">
+        <div class="jp">要点一： ここに最初の要点を一文で記述します。</div>
+        <div class="jpf"><ruby>要点<rt>ようてん</rt></ruby><ruby>一<rt>いち</rt></ruby>： ここに<ruby>最初<rt>さいしょ</rt></ruby>の<ruby>要点<rt>ようてん</rt></ruby>を<ruby>一文<rt>いちぶん</rt></ruby>で<ruby>記述<rt>きじゅつ</rt></ruby>します。</div>
+        <div class="en"><b>Point one:</b> state the first key point in a single sentence.</div>
+      </div>
+      <div class="entry">
+        <div class="jp">手法： <code>tool</code> をデフォルト設定のまま用います。</div>
+        <div class="jpf"><ruby>手法<rt>しゅほう</rt></ruby>： <code>tool</code> をデフォルト<ruby>設定<rt>せってい</rt></ruby>のまま<ruby>用<rt>もち</rt></ruby>います。</div>
+        <div class="en"><b>Method:</b> run <code>tool</code> with default settings — <code>code</code> spans render inline.</div>
+      </div>
+      <div class="entry">
+        <div class="jp">強調： 重要語は <span class="accent">アクセント色</span>で示せます。</div>
+        <div class="jpf"><ruby>強調<rt>きょうちょう</rt></ruby>： <ruby>重要語<rt>じゅうようご</rt></ruby>は <span class="accent">アクセント<ruby>色<rt>いろ</rt></ruby></span>で<ruby>示<rt>しめ</rt></ruby>せます。</div>
+        <div class="en"><b>Emphasis:</b> mark key terms with the <span class="accent">accent color</span> where it helps.</div>
+      </div>
+    </div>
+    <div class="col-fig tall">
+      <div class="fig-ph">portrait figure</div>
+      <div class="cap"><b>Portrait figure.</b> Use <code>.col-fig.tall</code> for tall images; replace this box with <code>&lt;img&gt;</code>.</div>
+    </div>
+  </div>
+  <div class="pageno">project · 1 / 2</div>
+</section>
+
+<!-- ============================ SLIDE 2 (landscape figure variant) ============================ -->
+<section class="slide">
+  <div class="eyebrow"><span class="n">02</span><span>セクション見出し &nbsp;·&nbsp; section label</span></div>
+  <div class="cols">
+    <div class="col-text">
+      <div class="entry">
+        <div class="jp">結果： 主要な数値や知見をここにまとめます。</div>
+        <div class="jpf"><ruby>結果<rt>けっか</rt></ruby>： <ruby>主要<rt>しゅよう</rt></ruby>な<ruby>数値<rt>すうち</rt></ruby>や<ruby>知見<rt>ちけん</rt></ruby>をここにまとめます。</div>
+        <div class="en"><b>Result:</b> summarize the headline numbers or findings here.</div>
+      </div>
+      <div class="entry">
+        <div class="jp">対比： 平均と中央値のように二つの値を対比できます。</div>
+        <div class="jpf"><ruby>対比<rt>たいひ</rt></ruby>： <ruby>平均<rt>へいきん</rt></ruby>と<ruby>中央値<rt>ちゅうおうち</rt></ruby>のように<ruby>二<rt>ふた</rt></ruby>つの<ruby>値<rt>あたい</rt></ruby>を<ruby>対比<rt>たいひ</rt></ruby>できます。</div>
+        <div class="en"><b>Contrast:</b> set two values side by side, e.g. mean vs median.</div>
+      </div>
+      <div class="entry">
+        <div class="jp">含意： 最後に一文で含意や次の一手を述べます。</div>
+        <div class="jpf"><ruby>含意<rt>がんい</rt></ruby>： <ruby>最後<rt>さいご</rt></ruby>に<ruby>一文<rt>いちぶん</rt></ruby>で<ruby>含意<rt>がんい</rt></ruby>や<ruby>次<rt>つぎ</rt></ruby>の<ruby>一手<rt>いって</rt></ruby>を<ruby>述<rt>の</rt></ruby>べます。</div>
+        <div class="en"><b>Takeaway:</b> close with one sentence on the implication or next step.</div>
+      </div>
+    </div>
+    <div class="col-fig">
+      <div class="fig-ph">landscape figure</div>
+      <div class="cap"><b>Landscape figure, n = N.</b> Default <code>.col-fig</code>; replace this box with <code>&lt;img src="assets/…"&gt;</code> and write the caption here.</div>
+    </div>
+  </div>
+  <div class="pageno">project · 2 / 2</div>
+</section>
+
+</body>
+</html>

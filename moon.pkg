@@ -1,5 +1,10 @@
 import {
+  "moonbitlang/async/fs",
   "moonbitlang/core/argparse",
 }
+
+import {
+  "moonbitlang/async",
+} for "test"
 
 supported_targets = "+native"

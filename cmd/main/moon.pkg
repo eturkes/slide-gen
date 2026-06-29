@@ -1,6 +1,8 @@
 import {
   "eturkes/slide-gen" @lib,
+  "moonbitlang/async",
   "moonbitlang/core/argparse",
+  "moonbitlang/core/env",
 }
 
 supported_targets = "+native"

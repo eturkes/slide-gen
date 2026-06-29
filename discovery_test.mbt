@@ -4,7 +4,8 @@
 /// Fixture tree under a fresh temp dir → `discover` → assert the exact
 /// candidate set. Covers (candidate) real dir + symlink→dir; (skipped)
 /// symlink→file, broken symlink, plain file, dotfile dir + file, and the
-/// `exclude`-named entry; (no recursion) a nested subdir under a candidate;
+/// `exclude`-named entry, unrepresentable names (leading space/newline);
+/// (no recursion) a nested subdir under a candidate;
 /// (cwd ≠ scanned parent) the temp dir is never the process cwd. The task group
 /// guarantees the fixture tree is removed even if an assertion fails.
 async test "discover candidate set" {
@@ -20,6 +21,10 @@ async test "discover candidate set" {
     @fs.mkdir("\{root}/.dotdir")
     @fs.write_file("\{root}/.dotfile", "", create_mode=CreateOrTruncate)
     @fs.mkdir("\{root}/myself")
+    // Unrepresentable names (leading space, embedded newline) are discovered as
+    // directory entries but dropped by the name policy.
+    @fs.mkdir("\{root}/ leading-space")
+    @fs.mkdir("\{root}/with\nnewline")
     json_inspect(discover(root, exclude="myself"), content=[
       "link_to_dir", "realdir",
     ])

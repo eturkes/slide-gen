@@ -5,13 +5,17 @@ test "cli help" {
   inspect(
     cli().render_help(),
     content=(
-      #|Usage: slide-gen [command]
+      #|Usage: slide-gen <command>
       #|
       #|Generate and manage slide decks across sibling projects.
       #|
       #|Commands:
-      #|  list  List discovered sibling projects.
-      #|  help  Print help for the subcommand(s).
+      #|  list     List discovered sibling projects.
+      #|  status   Show each sibling project's enabled state.
+      #|  enable   Enable a sibling project.
+      #|  disable  Disable a sibling project (also clears a stale entry).
+      #|  toggle   Flip a sibling project's enabled state.
+      #|  help     Print help for the subcommand(s).
       #|
       #|Options:
       #|  -h, --help  Show help information.

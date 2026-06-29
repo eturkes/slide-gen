@@ -21,4 +21,5 @@ target/
 
 # slide-gen runtime state + generated decks
 enabled.txt
+enabled.txt.tmp
 decks/

@@ -1,10 +1,14 @@
 import {
   "moonbitlang/async/fs",
   "moonbitlang/core/argparse",
+  "moonbitlang/core/env",
+  "moonbitlang/core/set",
 }
 
 import {
   "moonbitlang/async",
+  "moonbitlang/async/process",
+  "moonbitlang/core/quickcheck/splitmix",
 } for "test"
 
 supported_targets = "+native"

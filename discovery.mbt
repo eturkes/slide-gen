@@ -5,9 +5,10 @@
 ///
 /// Candidate = a direct child resolving to a directory: a real directory, or a
 /// symlink whose target is a directory. Skipped: dotfile entries, plain files,
-/// symlinks to non-directories, broken symlinks, and the entry named `exclude`
-/// (the repo's own directory). No recursion — only the top level is scanned.
-/// Names are returned sorted ascending.
+/// symlinks to non-directories, broken symlinks, the entry named `exclude` (the
+/// repo's own directory), and names not `representable` in the line-based state
+/// format. No recursion — only the top level is scanned. Names are returned
+/// sorted ascending.
 ///
 /// `@fs.kind` follows symlinks by default and raises on an unresolvable target,
 /// so one follow-stat both accepts symlinks-to-directories and rejects broken
@@ -21,7 +22,9 @@ pub async fn discover(parent : String, exclude~ : String) -> Array[String] {
   // include_hidden=true surfaces dotfiles so the dot-skip below is the single,
   // default-independent source of truth for hidden-entry exclusion.
   for name in @fs.readdir(parent, include_hidden=true) {
-    guard name != exclude && !name.has_prefix(".") else { continue }
+    guard name != exclude && !name.has_prefix(".") && representable(name) else {
+      continue
+    }
     let full = "\{parent}/\{name}"
     let is_dir = try @fs.kind(full) catch {
       _ => false
@@ -77,4 +80,24 @@ pub fn split_path(path : String) -> (String, String) {
     }
     None => (".", p)
   }
+}
+
+///|
+/// Whether `name` is representable in the newline-delimited state format and
+/// safely typeable as a CLI argument: non-empty, free of control characters
+/// (which include the newline that delimits lines) and `/`, with no leading or
+/// trailing space. Internal spaces are allowed, matching `parse_state`'s rule
+/// that line content is never trimmed. This is the contract the toggle-name
+/// generator models and the filter discovery applies, so the enabled set stays
+/// serializable over every candidate.
+pub fn representable(name : String) -> Bool {
+  let chars = name.to_array()
+  guard chars.length() > 0 else { return false }
+  for c in chars {
+    let code = c.to_int()
+    if code < 0x20 || code == 0x7f || c == '/' {
+      return false
+    }
+  }
+  !(chars[0] == ' ' || chars[chars.length() - 1] == ' ')
 }

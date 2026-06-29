@@ -22,9 +22,9 @@ check:
 build:
     moon build --target {{target}}
 
-# Run the test suite.
-test:
-    moon test --target {{target}}
+# Run the test suite; e2e tests exec the built binary via SLIDE_GEN_BIN.
+test: build
+    SLIDE_GEN_BIN="$(realpath "$(find _build/{{target}} -name main.exe -path '*cmd/main*' -print -quit)")" moon test --target {{target}}
 
 # Full gate sweep: format, check, build, test.
 all: fmt check build test

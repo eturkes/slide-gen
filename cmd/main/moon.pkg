@@ -1,0 +1,10 @@
+import {
+  "eturkes/slide-gen" @lib,
+  "moonbitlang/core/argparse",
+}
+
+supported_targets = "+native"
+
+options(
+  "is-main": true,
+)

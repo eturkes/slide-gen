@@ -12,3 +12,13 @@ node_modules/
 
 # direnv
 .direnv/
+
+# MoonBit (build output, fetched deps, toolchain agent state)
+_build/
+target/
+.mooncakes/
+.moonagent/
+
+# slide-gen runtime state + generated decks
+enabled.txt
+decks/

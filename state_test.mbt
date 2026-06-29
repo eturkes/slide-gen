@@ -2,16 +2,25 @@
 
 ///|
 /// Draw a representable name from a seeded RNG: length 1..=8 over a pool of
-/// safe ASCII plus a couple of multibyte codepoints, with spaces allowed only
-/// in interior positions (never at an edge). Feeds the randomized round-trip.
+/// safe ASCII plus a couple of multibyte codepoints, spaces only in interior
+/// positions (never at an edge) and never a leading `-`. Feeds the randomized
+/// round-trip.
 fn gen_name(rng : @splitmix.RandomState) -> String {
   let pool = [
     'a', 'b', 'c', 'X', 'Y', 'Z', '0', '1', '.', '_', '-', 'é', '道',
   ]
+  // The first position excludes '-' (a leading dash is unrepresentable). No pool
+  // char is whitespace and interior spaces never land at an edge, so every
+  // generated name satisfies `representable`.
+  let start_pool = [
+    'a', 'b', 'c', 'X', 'Y', 'Z', '0', '1', '.', '_', 'é', '道',
+  ]
   let len = 1 + rng.next_positive_int() % 8
   let mut s = ""
   for i in 0..<len {
-    let c = if i > 0 && i < len - 1 && rng.next_positive_int() % 4 == 0 {
+    let c = if i == 0 {
+      start_pool[rng.next_positive_int() % start_pool.length()]
+    } else if i < len - 1 && rng.next_positive_int() % 4 == 0 {
       ' '
     } else {
       pool[rng.next_positive_int() % pool.length()]
@@ -22,22 +31,30 @@ fn gen_name(rng : @splitmix.RandomState) -> String {
 }
 
 ///|
-/// The discovery name policy: reject empty, edge-whitespace, `/`, and control
-/// characters; accept everything else, including interior spaces and multibyte.
+/// The discovery name policy: reject empty, a leading `-`, any edge whitespace
+/// (Unicode, not just ASCII space), `/`, and C0/DEL/C1 control characters;
+/// accept everything else, including interior spaces, interior/trailing `-`, and
+/// multibyte codepoints.
 test "representable name policy" {
   assert_true(representable("simple"))
   assert_true(representable("a"))
   assert_true(representable("with space"))
   assert_true(representable("dot.in.middle"))
   assert_true(representable("é道"))
-  assert_true(representable("-dash-ok"))
+  assert_true(representable("mid-dash"))
+  assert_true(representable("trailing-dash-"))
   assert_false(representable(""))
+  assert_false(representable("-dash-bad"))
   assert_false(representable(" leading"))
   assert_false(representable("trailing "))
+  assert_false(representable("\u{a0}nbsp"))
+  assert_false(representable("ideographic\u{3000}"))
   assert_false(representable("with/slash"))
   assert_false(representable("tab\there"))
   assert_false(representable("nl\nhere"))
   assert_false(representable("\u{7f}del"))
+  assert_false(representable("\u{85}c1nel"))
+  assert_false(representable("a\u{9f}c1"))
 }
 
 ///|

@@ -48,13 +48,22 @@ async test "cli end-to-end" {
     )
     assert_eq(@fs.read_file(state).text(), "projA\n")
 
-    // enable an unknown name -> non-zero, state untouched.
-    let (code, _, _) = @process.collect_output(
+    // enable an unknown name -> exit 1 (app error) with the message on stderr
+    // (this also proves the stderr write flushes before the libc exit), state
+    // untouched.
+    let (code, _, err) = @process.collect_output(
       bin,
       ["enable", "ghost"],
       cwd=repo,
     )
-    assert_true(code != 0)
+    assert_eq(code, 1)
+    inspect(
+      err.text(),
+      content=(
+        #|slide-gen: unknown project 'ghost' (run `slide-gen list` to see candidates)
+        #|
+      ),
+    )
     assert_eq(@fs.read_file(state).text(), "projA\n")
 
     // toggle the other on -> canonical sorted persistence.
@@ -86,6 +95,22 @@ async test "cli end-to-end" {
     )
     assert_eq(code, 0)
     assert_eq(@fs.read_file(state).text(), "projB\n")
+
+    // run-from-anywhere: invoked from a nested subdir, discovery still anchors on
+    // the repo root (walks up to moon.mod) and lists the same siblings.
+    @fs.mkdir("\{repo}/cmd")
+    let deep = "\{repo}/cmd/main"
+    @fs.mkdir(deep)
+    let (code, out, _) = @process.collect_output(bin, ["list"], cwd=deep)
+    assert_eq(code, 0)
+    inspect(
+      out.text(),
+      content=(
+        #|projA
+        #|projB
+        #|
+      ),
+    )
 
     // missing required positional -> usage error (exit 2).
     let (code, _, _) = @process.collect_output(bin, ["enable"], cwd=repo)

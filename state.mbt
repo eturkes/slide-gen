@@ -76,9 +76,10 @@ pub fn parse_state(content : String) -> @set.Set[String] {
 }
 
 ///|
-/// Render the enable/disable overview: every current sibling marked `[x]`
-/// (enabled) or `[ ]` (disabled) in dictionary order, then any stale entries
-/// (enabled but no longer a sibling) flagged `[!] <name> (missing)`. Lines are
+/// Render the enable/disable overview: every current sibling (in the given
+/// order — the CLI passes them dictionary-sorted from `discover`) marked `[x]`
+/// (enabled) or `[ ]` (disabled), then any stale entries (enabled but no longer
+/// a sibling), sorted by codepoint, flagged `[!] <name> (missing)`. Lines are
 /// joined by newlines with no trailing newline; an empty overview is "".
 pub fn format_status(
   projects : Array[String],
@@ -118,12 +119,17 @@ pub async fn read_state(path : String) -> @set.Set[String] {
 }
 
 ///|
-/// Write the enabled set to `path` atomically: serialize to a sibling temp file
-/// (fsynced), then rename over the target. Rename within a directory is atomic
-/// on POSIX, so a reader sees either the old or the new file, never a partial
-/// one. Single-user tool, last-writer-wins -> no lock; a fixed temp name (rather
-/// than a unique one) keeps a crash from leaving more than one stale temp, which
-/// the next write overwrites.
+/// Write the enabled set to `path`: serialize to a sibling temp file (fsynced
+/// for content integrity), then rename over the target. Rename within a
+/// directory is atomic on POSIX, so a reader sees either the old or the new file
+/// whole, never a partial one — atomic visibility. Crash-durability of the
+/// rename itself is not guaranteed (the parent directory is not fsynced), which
+/// is acceptable for a regenerable single-user state file.
+///
+/// Single-user tool: one writer at a time, so no lock and the fixed temp name is
+/// safe — it keeps a crash from leaving more than one stale temp (the next write
+/// overwrites it). It is deliberately not a concurrency guarantee: simultaneous
+/// writers would share the temp and could interleave, which is out of scope.
 pub async fn write_state(path : String, enabled : @set.Set[String]) -> Unit {
   let tmp = path + ".tmp"
   @fs.write_file(

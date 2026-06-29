@@ -84,20 +84,24 @@ pub fn split_path(path : String) -> (String, String) {
 
 ///|
 /// Whether `name` is representable in the newline-delimited state format and
-/// safely typeable as a CLI argument: non-empty, free of control characters
-/// (which include the newline that delimits lines) and `/`, with no leading or
-/// trailing space. Internal spaces are allowed, matching `parse_state`'s rule
-/// that line content is never trimmed. This is the contract the toggle-name
-/// generator models and the filter discovery applies, so the enabled set stays
-/// serializable over every candidate.
+/// safely typeable as a CLI argument: non-empty; no leading `-` (argparse would
+/// read it as an option, so `enable -x` cannot reach the name); free of C0, DEL,
+/// and C1 control characters (U+0000-U+001F, U+007F-U+009F, which include the
+/// newline that delimits lines) and `/`; and no leading or trailing whitespace
+/// (any Unicode White_Space, not just ASCII space — an invisible NBSP edge is as
+/// error-prone as a plain one). Internal spaces are allowed, matching
+/// `parse_state`'s rule that line content is never trimmed. This is the contract
+/// the toggle-name generator models and the filter discovery applies, so the
+/// enabled set stays serializable and addressable over every candidate.
 pub fn representable(name : String) -> Bool {
   let chars = name.to_array()
   guard chars.length() > 0 else { return false }
+  guard chars[0] != '-' else { return false }
   for c in chars {
     let code = c.to_int()
-    if code < 0x20 || code == 0x7f || c == '/' {
+    if code < 0x20 || (code >= 0x7f && code <= 0x9f) || c == '/' {
       return false
     }
   }
-  !(chars[0] == ' ' || chars[chars.length() - 1] == ' ')
+  !(chars[0].is_whitespace() || chars[chars.length() - 1].is_whitespace())
 }

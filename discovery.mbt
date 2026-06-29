@@ -12,7 +12,10 @@
 /// `@fs.kind` follows symlinks by default and raises on an unresolvable target,
 /// so one follow-stat both accepts symlinks-to-directories and rejects broken
 /// links; the lstat-then-stat split sketched in planning proved redundant once
-/// `kind` semantics were verified against the upstream tests.
+/// `kind` semantics were verified against the installed async API plus the local
+/// fixtures. Any `kind` error — broken link, a racing unlink, an unreadable
+/// entry — classifies that entry as a non-candidate: discovery lists what it can
+/// resolve rather than aborting the whole scan over one bad sibling.
 pub async fn discover(parent : String, exclude~ : String) -> Array[String] {
   let candidates : Array[String] = []
   // include_hidden=true surfaces dotfiles so the dot-skip below is the single,
@@ -56,14 +59,16 @@ fn lex_compare(a : String, b : String) -> Int {
 }
 
 ///|
-/// Split an absolute path into (parent directory, final component) at the last
-/// `/`. A single trailing slash is ignored; a root-level path ("/foo") yields
-/// parent "/"; a path with no slash yields parent ".".
+/// Split a path into (parent directory, final component) at the last `/`.
+/// Trailing slashes are ignored; a root-level path ("/foo") yields parent "/";
+/// a path with no slash yields parent ".". (`@env.current_dir()` returns a
+/// normalized absolute path with no trailing slash, so the degenerate all-slash
+/// ("/" -> ("/", "")) and empty ("" -> (".", "")) inputs never arise in `list`.)
 pub fn split_path(path : String) -> (String, String) {
-  let p = if path.length() > 1 && path.has_suffix("/") {
-    path[:path.length() - 1].to_owned()
-  } else {
-    path
+  // Strip every trailing slash, keeping a lone leading "/" as the root.
+  let mut p = path
+  while p.length() > 1 && p.has_suffix("/") {
+    p = p[:p.length() - 1].to_owned()
   }
   match p.rev_find("/") {
     Some(i) => {

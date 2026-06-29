@@ -36,4 +36,6 @@ test "split_path" {
   inspect("\{p3}|\{n3}", content=".|bare")
   let (p4, n4) = split_path("/a/b/")
   inspect("\{p4}|\{n4}", content="/a|b")
+  let (p5, n5) = split_path("/a/b//")
+  inspect("\{p5}|\{n5}", content="/a|b")
 }

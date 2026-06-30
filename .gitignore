@@ -19,6 +19,9 @@ target/
 .mooncakes/
 .moonagent/
 
+# Headroom tokensave code-graph state (regenerable; Serena's self-ignores via .serena/.gitignore)
+.tokensave/
+
 # slide-gen runtime state + generated decks
 enabled.txt
 enabled.txt.tmp

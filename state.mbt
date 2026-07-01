@@ -186,15 +186,18 @@ pub async fn find_repo_root() -> String? {
 }
 
 ///|
-/// Whether a `moon.mod`'s content marks the slide-gen repo — it declares this
-/// module name. Matched position-independently (a substring test), so field
-/// order is irrelevant; a dependency reference (`"eturkes/slide-gen@..."` in an
-/// import block) carries no `name = ` prefix and so never counts. Bound to the
-/// canonical `moon fmt` spacing: a formatter that changed it would fail safe —
-/// the tool reports "not inside a slide-gen project" rather than silently
-/// anchoring on an unrelated MoonBit project up the tree.
+/// Whether a `moon.mod` declares this module — a `name = "eturkes/slide-gen"`
+/// field anchored at the start of a line (file start or just after a newline),
+/// per the canonical `moon fmt` layout. Line-anchoring stays position-independent
+/// across field order yet rejects the same literal embedded inside another
+/// field's quoted value; the trailing quote rejects a longer module name
+/// (`eturkes/slide-gen-x`); a dependency reference (`"eturkes/slide-gen@..."` in
+/// an import block) carries no `name = ` prefix and never counts. Bound to
+/// `moon fmt` spacing: a formatter that changed it fails safe — the tool reports
+/// "not inside a slide-gen project" rather than anchoring on an unrelated project.
 fn is_repo_marker(moon_mod : String) -> Bool {
-  moon_mod.contains("name = \"eturkes/slide-gen\"")
+  let decl = "name = \"eturkes/slide-gen\""
+  moon_mod.has_prefix(decl) || moon_mod.contains("\n" + decl)
 }
 
 ///|

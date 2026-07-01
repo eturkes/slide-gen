@@ -59,11 +59,12 @@ test "representable name policy" {
 
 ///|
 /// Every `(action, in_set, is_candidate)` triple (all 12) maps to the documented
-/// `Decision`: enable/toggle of a non-candidate rejects — including a stale name
-/// that is still enabled (`Enable, in_set, !candidate`), since enable requires a
-/// current sibling; disable tolerates a stale entry (in set, no longer a sibling)
-/// so it stays removable; disabling an entirely unknown name rejects; idempotent
-/// no-ops resolve to their state.
+/// `Decision`. Reaching "enabled" needs a current sibling, so `enable` (either
+/// state) and `toggle`-on of a non-candidate reject — including a still-enabled
+/// stale name (`Enable, in_set, !candidate`). But `toggle`-off and `disable` of a
+/// stale entry (in set, no longer a sibling) remove it, so it stays removable;
+/// disabling an entirely unknown name rejects; idempotent no-ops resolve to their
+/// state.
 test "resolve_action decision table" {
   let cases : Array[(Action, Bool, Bool, Decision)] = [
     (Enable, false, true, SetEnabled(true)),

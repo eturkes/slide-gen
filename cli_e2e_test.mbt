@@ -17,7 +17,11 @@ async test "cli end-to-end" {
     @fs.mkdir(repo)
     @fs.mkdir("\{projects_dir}/projA")
     @fs.mkdir("\{projects_dir}/projB")
-    @fs.write_file("\{repo}/moon.mod", "", create_mode=CreateOrTruncate)
+    @fs.write_file(
+      "\{repo}/moon.mod",
+      "name = \"eturkes/slide-gen\"\n",
+      create_mode=CreateOrTruncate,
+    )
     let state = "\{repo}/enabled.txt"
 
     // list -> both siblings in order, exit 0.
@@ -97,8 +101,15 @@ async test "cli end-to-end" {
     assert_eq(@fs.read_file(state).text(), "projB\n")
 
     // run-from-anywhere: invoked from a nested subdir, discovery still anchors on
-    // the repo root (walks up to moon.mod) and lists the same siblings.
+    // the repo root and lists the same siblings. A foreign `moon.mod` planted at
+    // the intermediate `cmd` level must be walked past (it does not declare this
+    // module) rather than mis-anchored on, so the walk reaches the real root.
     @fs.mkdir("\{repo}/cmd")
+    @fs.write_file(
+      "\{repo}/cmd/moon.mod",
+      "name = \"other/nested\"\n",
+      create_mode=CreateOrTruncate,
+    )
     let deep = "\{repo}/cmd/main"
     @fs.mkdir(deep)
     let (code, out, _) = @process.collect_output(bin, ["list"], cwd=deep)

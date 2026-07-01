@@ -175,9 +175,9 @@ pub async fn apply_action(
 
 ///|
 /// Anchor on the repository root so every subcommand works run-from-anywhere:
-/// the nearest ancestor of the current directory holding a `moon.mod` marker.
-/// `None` when the cwd is unavailable or no marker exists up to the filesystem
-/// root.
+/// the nearest ancestor of the current directory whose `moon.mod` declares this
+/// module (`is_repo_marker`). `None` when the cwd is unavailable or no such
+/// marker exists up to the filesystem root.
 pub async fn find_repo_root() -> String? {
   match @env.current_dir() {
     None => None
@@ -186,10 +186,30 @@ pub async fn find_repo_root() -> String? {
 }
 
 ///|
-/// Walk upward from `dir` looking for a `moon.mod` marker, stopping at the
-/// filesystem root (where `split_path` no longer shortens the path).
+/// Whether a `moon.mod`'s content marks the slide-gen repo — it declares this
+/// module name. Matched position-independently (a substring test), so field
+/// order is irrelevant; a dependency reference (`"eturkes/slide-gen@..."` in an
+/// import block) carries no `name = ` prefix and so never counts. Bound to the
+/// canonical `moon fmt` spacing: a formatter that changed it would fail safe —
+/// the tool reports "not inside a slide-gen project" rather than silently
+/// anchoring on an unrelated MoonBit project up the tree.
+fn is_repo_marker(moon_mod : String) -> Bool {
+  moon_mod.contains("name = \"eturkes/slide-gen\"")
+}
+
+///|
+/// Walk upward from `dir` for the slide-gen repo root — the nearest ancestor
+/// whose `moon.mod` is `is_repo_marker` — stopping at the filesystem root (where
+/// `split_path` no longer shortens the path). A `moon.mod` that is absent or
+/// unreadable reads as empty, hence not the marker, so the walk continues past
+/// it rather than aborting the scan or anchoring on a foreign module.
 async fn ascend(dir : String) -> String? {
-  if @fs.exists("\{dir}/moon.mod") {
+  let content = try @fs.read_file("\{dir}/moon.mod").text() catch {
+    _ => ""
+  } noraise {
+    text => text
+  }
+  if is_repo_marker(content) {
     Some(dir)
   } else {
     let (parent, _) = split_path(dir)

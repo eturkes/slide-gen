@@ -42,9 +42,10 @@ async fn report(decision : @lib.Decision, name : String) -> Unit {
 
 ///|
 /// Entry point: parse argv, anchor on the repository root (the nearest ancestor
-/// holding `moon.mod`) so every subcommand works run-from-anywhere, then
-/// dispatch. Parse failures exit 2; runtime failures (no repo root, filesystem
-/// errors, an unknown project) exit 1 with a stderr message; success exits 0.
+/// whose `moon.mod` declares this module) so every subcommand works
+/// run-from-anywhere, then dispatch. Parse failures exit 2; runtime failures (no
+/// repo root, filesystem errors, an unknown project) exit 1 with a stderr
+/// message; success exits 0.
 async fn main {
   let matches = try @lib.cli().parse() catch {
     err => die("slide-gen: \{err}\n", 2)
@@ -56,7 +57,7 @@ async fn main {
       Some(root) => root
       None =>
         die(
-          "slide-gen: not inside a slide-gen project (no moon.mod found from the current directory upward)\n",
+          "slide-gen: not inside a slide-gen project (no slide-gen moon.mod found from the current directory upward)\n",
           1,
         )
     }

@@ -15,6 +15,12 @@ test "get_attr value forms" {
     get_attr(region, 0, hi, "missing").unwrap_or("<absent>"),
     content="<absent>",
   )
+  // A duplicate attribute resolves to its first occurrence (HTML parse behavior).
+  let dup = " class=\"a\" class=\"b\" ".to_array()
+  inspect(
+    get_attr(dup, 0, dup.length(), "class").unwrap_or("<absent>"),
+    content="a",
+  )
 }
 
 ///|
@@ -42,15 +48,20 @@ test "strip_comments removes comments and swallows unterminated" {
 }
 
 ///|
-/// `strip_raw_text` blanks `<style>`/`<script>` content but keeps their tags; an
-/// unterminated raw-text element is left intact rather than swallowing the rest.
+/// `strip_raw_text` blanks `<style>`/`<script>` content but keeps their tags; a
+/// close tag matches only at a name boundary (`</stylex>` does not close); and an
+/// unterminated raw-text element is blanked to end of document.
 test "strip_raw_text blanks raw-text content" {
   let a = strip_raw_text("<style><img src=x></style>keep".to_array())
   inspect(range_to_string(a, 0, a.length()), content="<style></style>keep")
   let b = strip_raw_text("x<script>a<b</script>y".to_array())
   inspect(range_to_string(b, 0, b.length()), content="x<script></script>y")
+  // </stylex> is not a name-boundary close, so blanking continues to the real one.
+  let d = strip_raw_text("<style>x</stylex>y</style>z".to_array())
+  inspect(range_to_string(d, 0, d.length()), content="<style></style>z")
+  // Unterminated raw-text runs to end of document, so its remainder is blanked.
   let c = strip_raw_text("<style>body{}".to_array())
-  inspect(range_to_string(c, 0, c.length()), content="<style>body{}")
+  inspect(range_to_string(c, 0, c.length()), content="<style>")
 }
 
 ///|

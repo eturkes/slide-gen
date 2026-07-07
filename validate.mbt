@@ -168,12 +168,6 @@ fn index_ci(doc : Array[Char], needle : Array[Char]) -> Int {
 }
 
 ///|
-/// Whether `doc` contains `needle` (ASCII-lowercase) under ASCII case-folding.
-fn contains_ci(doc : Array[Char], needle : Array[Char]) -> Bool {
-  index_ci(doc, needle) >= 0
-}
-
-///|
 /// ASCII case-insensitive string equality — for comparing attribute values
 /// (`lang`, `charset`) whose canonical forms are ASCII.
 fn ci_eq(a : String, b : String) -> Bool {
@@ -245,9 +239,11 @@ fn raw_text_open(doc : Array[Char], i : Int) -> String? {
 /// open and close tags. Browsers do not parse markup inside these elements, so a
 /// `<img src=…>` or `<section class="slide">` written in CSS (as the template's
 /// placeholder note is) must not be scanned as a real element. Run after
-/// `strip_comments`. An unterminated raw-text element is left intact — its
-/// content is scanned normally and the missing close tag is caught independently
-/// by `frame.style` — rather than swallowing the rest of the document.
+/// `strip_comments`. The close tag matches only at a name boundary, so
+/// `</stylex>` does not close a `<style>`. An unterminated raw-text element runs
+/// to end of document (browsers keep consuming raw text), so its remainder is
+/// blanked too — an unclosed `<style>` then cascades to `frame.style` plus
+/// `frame.body`/`frame.no_slides`, which matches its blank render.
 fn strip_raw_text(doc : Array[Char]) -> Array[Char] {
   let out : Array[Char] = []
   let n = doc.length()
@@ -260,12 +256,8 @@ fn strip_raw_text(doc : Array[Char]) -> Array[Char] {
           for k in i..<past_gt {
             out.push(doc[k])
           }
-          let close = "</\{tag}".to_array()
-          let mut j = past_gt
-          while j < n && !ci_matches_at(doc, j, close) {
-            j = j + 1
-          }
-          i = if j < n { j } else { past_gt }
+          let close = find_close_tag(doc, tag, past_gt)
+          i = if close >= 0 { close } else { n }
         }
         None => {
           out.push(doc[i])
@@ -467,6 +459,33 @@ fn find_all_open_tags(doc : Array[Char], name : String) -> Array[Int] {
 }
 
 ///|
+/// Index of the first `</name>` close tag at or after `from` (matched
+/// case-insensitively), requiring a name boundary (whitespace, `>`, `/`, or end)
+/// after `name` so `</style>` matches but `</stylex>` does not. Returns the index
+/// of its `<`, or `-1` when absent.
+fn find_close_tag(doc : Array[Char], name : String, from : Int) -> Int {
+  let needle = name.to_array()
+  let n = doc.length()
+  let m = needle.length()
+  for i in from..<n {
+    if doc[i] == '<' &&
+      i + 1 < n &&
+      doc[i + 1] == '/' &&
+      ci_matches_at(doc, i + 2, needle) {
+      let after = i + 2 + m
+      if after >= n {
+        return i
+      }
+      let c = doc[after]
+      if is_space(c) || c == '>' || c == '/' {
+        return i
+      }
+    }
+  }
+  -1
+}
+
+///|
 /// Number of `<section>` elements carrying class `slide`. M2.1b replaces this
 /// count with `scan_deck(doc).length()` once the per-slide model exists.
 fn count_slides(doc : Array[Char]) -> Int {
@@ -487,7 +506,15 @@ fn count_slides(doc : Array[Char]) -> Int {
 /// charset, a `<style>` closed before `<body>`, and a complete `<body>`/`</html>`
 /// close. Findings are appended to `out` in this order.
 fn check_frame(doc : Array[Char], out : Report) -> Unit {
-  if !contains_ci(doc, "<!doctype html".to_array()) {
+  let doctype = "<!doctype html".to_array()
+  let dt = index_ci(doc, doctype)
+  let doctype_ok = if dt >= 0 {
+    let after = dt + doctype.length()
+    after >= doc.length() || is_space(doc[after]) || doc[after] == '>'
+  } else {
+    false
+  }
+  if !doctype_ok {
     out.findings.push(must("frame.doctype", "missing <!doctype html>"))
   }
   let html_tags = find_all_open_tags(doc, "html")
@@ -514,20 +541,30 @@ fn check_frame(doc : Array[Char], out : Report) -> Unit {
   if !charset_ok {
     out.findings.push(must("frame.charset", "missing <meta charset=\"utf-8\">"))
   }
-  let body_open = index_ci(doc, "<body>".to_array())
-  let style_open = index_ci(doc, "<style>".to_array())
-  let style_close = index_ci(doc, "</style>".to_array())
-  let style_ok = style_open >= 0 &&
+  // Tag- and attribute-aware (not exact-literal): `<body class="deck">` and
+  // `<style media="screen">` are still recognized, and a `</style>` only counts
+  // when it follows the `<style>` it closes (a stray earlier `</style>` cannot
+  // satisfy the check for a later, unclosed `<style>`).
+  let body_tags = find_all_open_tags(doc, "body")
+  let body_lt = if body_tags.length() > 0 { body_tags[0] } else { -1 }
+  let style_tags = find_all_open_tags(doc, "style")
+  let style_lt = if style_tags.length() > 0 { style_tags[0] } else { -1 }
+  let style_close = if style_lt >= 0 {
+    find_close_tag(doc, "style", style_lt)
+  } else {
+    -1
+  }
+  let style_ok = style_lt >= 0 &&
     style_close >= 0 &&
-    (body_open < 0 || style_close < body_open)
+    (body_lt < 0 || style_close < body_lt)
   if !style_ok {
     out.findings.push(
       must("frame.style", "<style> must be present and closed before <body>"),
     )
   }
-  let body_ok = body_open >= 0 &&
-    index_ci(doc, "</body>".to_array()) >= 0 &&
-    index_ci(doc, "</html>".to_array()) >= 0
+  let body_ok = body_lt >= 0 &&
+    find_close_tag(doc, "body", body_lt) >= 0 &&
+    find_close_tag(doc, "html", body_lt) >= 0
   if !body_ok {
     out.findings.push(must("frame.body", "missing <body>, </body>, or </html>"))
   }
@@ -585,15 +622,19 @@ pub fn validate_deck(
 }
 
 ///|
-/// The bundle's asset set: `assets/<name>` for each entry in `dir/assets/`. A
-/// missing `dir/assets/` is not an error — a deck may ship zero figures — so it
-/// yields the empty set.
+/// The bundle's asset set: `assets/<name>` for each regular file in `dir/assets/`.
+/// A missing `dir/assets/` is not an error — a deck may ship zero figures — so it
+/// yields the empty set. Subdirectories are skipped: only files can back an
+/// `<img src>`, so a directory must never satisfy an `img.missing` check.
 pub async fn list_assets(dir : String) -> @set.Set[String] {
   let names : Array[String] = []
   let assets_dir = "\{dir}/assets"
   if @fs.exists(assets_dir) {
     for name in @fs.readdir(assets_dir) {
-      names.push("assets/\{name}")
+      match @fs.kind("\{assets_dir}/\{name}", follow_symlink=true) {
+        @fs.Regular => names.push("assets/\{name}")
+        _ => ()
+      }
     }
   }
   @set.Set(names[:])

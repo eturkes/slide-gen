@@ -71,9 +71,11 @@ test "envelope defects each map to their code" {
     validate_deck(envelope(charset=""), "project", no_assets()).codes(),
     content=["frame.charset"],
   )
+  // An unclosed <style> is raw text to end of document (browser RAWTEXT-to-EOF),
+  // so the body it swallows is gone: frame.style plus frame.body/no_slides.
   json_inspect(
     validate_deck(envelope(style="<style>body{}"), "project", no_assets()).codes(),
-    content=["frame.style"],
+    content=["frame.style", "frame.body", "frame.no_slides"],
   )
   json_inspect(
     validate_deck(envelope(html_close=""), "project", no_assets()).codes(),
@@ -83,6 +85,50 @@ test "envelope defects each map to their code" {
     validate_deck(envelope(sections=""), "project", no_assets()).codes(),
     content=["frame.no_slides"],
   )
+}
+
+///|
+/// Attributed `<style>`/`<body>` (a `media`/`class` attribute) still satisfy the
+/// frame checks — discovery is tag- and attribute-aware, not exact-literal.
+test "attributed <style> and <body> pass the frame checks" {
+  let attributed = envelope(
+    style="<style media=\"screen\">body{}</style>",
+    body_open="<body class=\"deck\">",
+  )
+  json_inspect(validate_deck(attributed, "project", no_assets()).codes(), content=[])
+}
+
+///|
+/// A decoy `<img>` inside an unclosed `<style>` is swallowed with the rest of the
+/// document (RAWTEXT-to-EOF), so it never surfaces as `img.not_asset`; only the
+/// structural frame findings remain.
+test "unclosed <style> swallows a decoy <img> rather than leaking img.not_asset" {
+  let leaky = envelope(style="<style>/* <img src=\"foo.png\"> */")
+  json_inspect(validate_deck(leaky, "project", no_assets()).codes(), content=[
+    "frame.style", "frame.body", "frame.no_slides",
+  ])
+}
+
+///|
+/// A stray `</style>` before `<body>` must not satisfy `frame.style` for a real
+/// `<style>` opened (and left unclosed) after `<body>`: the close must follow the
+/// open it closes, else an unclosed style would validate clean.
+test "frame.style requires the close to follow its own open" {
+  let deck =
+    #|<!doctype html>
+    #|<html lang="ja">
+    #|<head>
+    #|<meta charset="utf-8">
+    #|</style>
+    #|</head>
+    #|<body>
+    #|<section class="slide"></section>
+    #|<style>body{}</body>
+    #|</html>
+    #|
+  json_inspect(validate_deck(deck, "project", no_assets()).codes(), content=[
+    "frame.style", "frame.body",
+  ])
 }
 
 ///|

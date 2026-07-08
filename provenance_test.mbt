@@ -344,8 +344,10 @@ async test "validate_bundle_dir deck cross-reference" {
 /// `data-claim` warns `prov.untagged_number` while a tagged sibling stays silent;
 /// a committed PNG shown by an `<img>` carrying no `data-claim` warns
 /// `prov.asset_uncited`; and a fully-covered bundle (a tagged number plus a cited
-/// `<img>`) passes clean. The rows are `gap` status so their source checks are
-/// skipped, isolating the coverage warnings.
+/// `<img>`) passes clean. Each warning case also asserts the report still
+/// passes (`ok()`), pinning these findings as non-blocking `Should`s. The rows
+/// are `gap` status so their source checks are skipped, isolating the coverage
+/// warnings.
 async test "validate_bundle_dir coverage warnings" {
   @async.with_task_group() <| group => {
     let root = @fs.tmpdir(prefix="slide-gen-prov-cov")
@@ -363,9 +365,11 @@ async test "validate_bundle_dir coverage warnings" {
       Some(prov_gap_rows(["c1"])),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(untagged, "project", root).codes(), content=[
-      "prov.untagged_number",
-    ])
+    let untagged_report = validate_bundle_dir(untagged, "project", root)
+    json_inspect(untagged_report.codes(), content=["prov.untagged_number"])
+    // The coverage warning is advisory: a bundle carrying only a Should finding
+    // still passes, so a should()->must() regression would fail this `ok()`.
+    assert_true(untagged_report.ok())
     // A committed PNG shown by an <img> carrying no data-claim is uncited.
     let uncited = make_bundle(
       root,
@@ -376,9 +380,9 @@ async test "validate_bundle_dir coverage warnings" {
     )
     @fs.mkdir("\{uncited}/assets")
     @fs.write_file("\{uncited}/assets/f.png", "x", create_mode=CreateOrTruncate)
-    json_inspect(validate_bundle_dir(uncited, "project", root).codes(), content=[
-      "prov.asset_uncited",
-    ])
+    let uncited_report = validate_bundle_dir(uncited, "project", root)
+    json_inspect(uncited_report.codes(), content=["prov.asset_uncited"])
+    assert_true(uncited_report.ok())
     // A tagged number and a cited <img> pass clean.
     let clean = make_bundle(
       root,

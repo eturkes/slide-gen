@@ -188,6 +188,17 @@ test "find_data_claims skips decoys and treats a text `<` as text" {
 }
 
 ///|
+/// `find_data_claims` honors its half-open `end`: an open tag whose `>` runs
+/// past `end` contributes no claim, so an element-scoped scan cannot reach a
+/// claim from beyond its own span (a malformed unclosed descendant). The same
+/// tag under the whole-doc range is still collected.
+test "find_data_claims honors the end bound" {
+  let doc = "<a data-claim=\"c1\">".to_array()
+  json_inspect(find_data_claims(doc, 0, 2), content=[])
+  json_inspect(find_data_claims(doc, 0, doc.length()), content=["c1"])
+}
+
+///|
 /// Run `check_deck_crossref` over a fragment's cleaned HTML and return the codes,
 /// so the cross-reference checks can be exercised without a bundle on disk.
 fn crossref_codes(

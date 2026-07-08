@@ -382,14 +382,15 @@ fn check_gaps(text : String, out : Report) -> Unit {
 }
 
 ///|
-/// Collect every `data-claim` attribute value carried by an open tag within the
-/// half-open range `doc[start:end]`, in document order and at any depth. The
-/// dangling-claim scan passes the whole cleaned deck (`0, doc.length()`); the
-/// coverage check passes one element's own span (`el.open_lt, el.hi`) to ask
-/// whether that element or a descendant carries a claim — within such a nested
-/// span every descendant tag closes before `end`, so no open tag straddles the
-/// bound and the range is honest. An open tag is recognized only when a letter
-/// follows `<` (mirroring `find_all_open_tags`), so a literal `<` in text
+/// Collect every `data-claim` attribute value carried by an open tag that lies
+/// wholly within the half-open range `doc[start:end]`, in document order and at
+/// any depth. The dangling-claim scan passes the whole cleaned deck
+/// (`0, doc.length()`); the coverage check passes one element's own span
+/// (`el.open_lt, el.hi`) to ask whether that element or a descendant carries a
+/// claim. The bound is enforced, not assumed: an open tag whose `>` runs past
+/// `end` is dropped, so a malformed unclosed descendant cannot pull a claim in
+/// from beyond the range. An open tag is recognized only when a letter follows
+/// `<` (mirroring `find_all_open_tags`), so a literal `<` in text
 /// (`5 < 6`) is not read as a tag and a `data-claim`-shaped run in prose after it
 /// is not collected; `get_attr` skips a `data-claim`-shaped run inside another
 /// attribute's quoted value. Close tags and `<!...>` are stepped over via
@@ -401,9 +402,14 @@ fn find_data_claims(doc : Array[Char], start : Int, end : Int) -> Array[String] 
   while i < end {
     if doc[i] == '<' && i + 1 < end && is_ascii_letter(doc[i + 1]) {
       let (_, lo, hi, past_gt) = scan_open_tag(doc, i)
-      match get_attr(doc, lo, hi, "data-claim") {
-        Some(id) => out.push(id)
-        None => ()
+      // Honor the half-open bound: collect only a tag whose `>` lands at or
+      // before `end`. A tag running past `end` (a malformed unclosed descendant)
+      // belongs beyond the range, so drop its claim rather than reach for it.
+      if past_gt <= end {
+        match get_attr(doc, lo, hi, "data-claim") {
+          Some(id) => out.push(id)
+          None => ()
+        }
       }
       i = past_gt
     } else if doc[i] == '<' &&
@@ -443,8 +449,10 @@ fn has_number(s : String) -> Bool {
 ///   figure traces to a source. The scan spans the element's own tag
 ///   (`el.open_lt`), so a claim on the element itself counts.
 /// - `prov.asset_uncited` (SHOULD): every committed `assets/*.png` should be
-///   displayed by an `<img>` whose `data-claim` names a schema-valid row.
-///   Iterating the `assets` set also flags an orphan PNG shown by no `<img>`.
+///   referenced by an `<img>` whose `data-claim` names a schema-valid row.
+///   Iterating the `assets` set also flags an orphan PNG referenced by no
+///   `<img>`. Extension match is case-sensitive, mirroring the exact-match asset
+///   pipeline (`list_assets`/`check_imgs`); generated bundles emit `.png`.
 fn check_deck_crossref(
   doc : Array[Char],
   assets : @set.Set[String],
@@ -490,7 +498,7 @@ fn check_deck_crossref(
       out.findings.push(
         should(
           "prov.asset_uncited",
-          "asset \{asset} is displayed by no data-claim <img>",
+          "asset \{asset} is referenced by no data-claim <img>",
         ),
       )
     }

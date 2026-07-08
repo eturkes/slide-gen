@@ -432,27 +432,31 @@ fn has_class(doc : Array[Char], lo : Int, hi : Int, token : String) -> Bool {
 /// Indices of every `<` that opens a `name` tag (matched case-insensitively):
 /// requires a tag-name boundary (whitespace, `>`, `/`, or end) after `name` so
 /// `<html>` matches but `<htmlx>` does not, and skips close tags (`</name>`).
+/// Walks tag by tag via `skip_tag`, so a `<name>` sitting inside a quoted
+/// attribute value of an earlier tag is stepped over as part of that tag, never
+/// mistaken for a real open tag — the same quote-safety `find_by_class` gives
+/// slide discovery. Runs on the cleaned doc (raw-text content already blanked),
+/// so no `<` inside CSS/JS reaches this scan.
 fn find_all_open_tags(doc : Array[Char], name : String) -> Array[Int] {
   let out : Array[Int] = []
   let needle = name.to_array()
   let n = doc.length()
   let m = needle.length()
-  for i in 0..<n {
+  let mut i = 0
+  while i < n {
     if doc[i] == '<' {
-      if i + 1 < n && doc[i + 1] == '/' {
-        continue
-      }
-      if ci_matches_at(doc, i + 1, needle) {
+      if i + 1 < n && doc[i + 1] != '/' && ci_matches_at(doc, i + 1, needle) {
         let after = i + 1 + m
-        if after >= n {
+        if after >= n ||
+          is_space(doc[after]) ||
+          doc[after] == '>' ||
+          doc[after] == '/' {
           out.push(i)
-        } else {
-          let c = doc[after]
-          if is_space(c) || c == '>' || c == '/' {
-            out.push(i)
-          }
         }
       }
+      i = skip_tag(doc, i, n)
+    } else {
+      i = i + 1
     }
   }
   out
@@ -597,11 +601,11 @@ fn match_close(
 // -- Element discovery -------------------------------------------------------
 
 ///|
-/// A matched element: its ASCII-lowercase `tag` name, the class `token` it
-/// matched on, and the half-open `[lo, hi)` span of its inner HTML (between the
-/// open tag's `>` and the close tag's `<`).
+/// A matched element: the class `token` it matched on and the half-open
+/// `[lo, hi)` span of its inner HTML (between the open tag's `>` and the close
+/// tag's `<`). The tag name is filtered inside `find_by_class` (via `want_tag`),
+/// so callers never need it on the result.
 priv struct Elem {
-  tag : String
   token : String
   lo : Int
   hi : Int
@@ -630,11 +634,18 @@ fn match_class(
 /// a nested same-class element is not reported as a sibling; non-matching
 /// elements are descended into. Every tag is skipped past its real `>`, so a `<`
 /// inside a quoted attribute value is never mistaken for a tag.
+///
+/// `want_tag` (default `""` = any) constrains a match to that ASCII-lowercase
+/// tag name: a class match on a different tag is treated as a non-match and
+/// descended into, so a real `<section class="slide">` nested inside a
+/// `<div class="slide">` wrapper is still found rather than hidden behind the
+/// wrapper's skipped body.
 fn find_by_class(
   doc : Array[Char],
   start : Int,
   end : Int,
   tokens : Array[String],
+  want_tag? : String = "",
 ) -> Array[Elem] {
   let out : Array[Elem] = []
   let mut i = start
@@ -645,11 +656,17 @@ fn find_by_class(
       } else {
         let (tag, lo, hi, past_gt) = scan_open_tag(doc, i)
         match match_class(doc, lo, hi, tokens) {
-          Some(tk) => {
-            let (close_lt, close_past) = match_close(doc, tag, past_gt, end)
-            out.push(Elem::{ tag, token: tk, lo: past_gt, hi: close_lt })
-            i = close_past
-          }
+          Some(tk) =>
+            if want_tag == "" || want_tag == tag {
+              let (close_lt, close_past) = match_close(doc, tag, past_gt, end)
+              out.push(Elem::{ token: tk, lo: past_gt, hi: close_lt })
+              i = close_past
+            } else {
+              // Right class, wrong tag: descend so a nested wanted element
+              // (e.g. a real `<section class="slide">` under `<div class="slide">`)
+              // is not hidden behind this element's skipped body.
+              i = past_gt
+            }
           None => i = past_gt
         }
       }
@@ -680,14 +697,13 @@ priv struct Slide {
 ///|
 /// Parse every `<section class="slide">` into a `Slide`, tallying its outermost
 /// `.eyebrow`/`.pageno`/`.entry` descendants. Only `<section>` elements count as
-/// slides (a stray `<div class="slide">` is ignored). Replaces the M2.1a slide
-/// count: `scan_deck(doc).length()` is the slide total.
+/// slides (a `<div class="slide">` is not a slide, but a real
+/// `<section class="slide">` nested inside one is still found — `want_tag`
+/// descends through the non-section wrapper). Replaces the M2.1a slide count:
+/// `scan_deck(doc).length()` is the slide total.
 fn scan_deck(doc : Array[Char]) -> Array[Slide] {
   let slides : Array[Slide] = []
-  for el in find_by_class(doc, 0, doc.length(), ["slide"]) {
-    if el.tag != "section" {
-      continue
-    }
+  for el in find_by_class(doc, 0, doc.length(), ["slide"], want_tag="section") {
     let mut eyebrow_count = 0
     let mut pageno_count = 0
     let entries : Array[Entry] = []
@@ -830,10 +846,11 @@ fn check_imgs(
 // -- Public API --------------------------------------------------------------
 
 ///|
-/// Validate a deck's HTML against the envelope and image contract, returning a
-/// structured `Report`. `slug` is the project name used by the per-slide checks
-/// added in M2.1b (unused here). `assets` holds the bundle's `assets/<name>`
-/// files. Comments are stripped once before any scan.
+/// Validate a deck's HTML against the envelope, slide-structure, and image
+/// contract, returning a structured `Report`. `slug` is the project name used by
+/// the per-slide text checks added in M2.1b-ii (unused here). `assets` holds the
+/// bundle's `assets/<name>` files. Comments and raw-text content are stripped
+/// once before any scan.
 pub fn validate_deck(
   html : String,
   slug : String,

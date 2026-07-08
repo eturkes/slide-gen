@@ -108,3 +108,32 @@ test "scan_deck parses one builder slide" {
     content="1|1|1",
   )
 }
+
+///|
+/// `find_all_open_tags` is quote-aware: a `<meta>` written inside a quoted
+/// attribute value is stepped over as part of its host tag, so only the real
+/// `<meta>` element is reported — the property the frame checks rely on to stay
+/// fail-closed against attribute-embedded tag literals.
+test "find_all_open_tags ignores a tag literal inside a quoted attribute" {
+  let doc = "<div data-x=\"<meta charset=x>\"><meta charset=\"utf-8\"></div>".to_array()
+  let metas = find_all_open_tags(doc, "meta")
+  assert_eq(metas.length(), 1)
+  // The one reported open tag is the real element, not the attribute literal.
+  let (_, lo, hi, _) = scan_open_tag(doc, metas[0])
+  inspect(
+    get_attr(doc, lo, hi, "charset").unwrap_or("<absent>"),
+    content="utf-8",
+  )
+}
+
+///|
+/// `match_close` on a void `name` returns `(from, from)` (no content span), and
+/// on an unbalanced element that never closes it returns `(end, end)`.
+test "match_close: void element and unbalanced input" {
+  let img = "<img>tail".to_array()
+  let (a, b) = match_close(img, "img", 5, img.length())
+  inspect("\{a}|\{b}", content="5|5")
+  let div = "<div>abc".to_array()
+  let (c, d) = match_close(div, "div", 5, div.length())
+  inspect("\{c}|\{d}", content="8|8")
+}

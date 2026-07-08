@@ -56,7 +56,7 @@ fn no_assets() -> @set.Set[String] {
 }
 
 ///|
-/// A well-formed envelope with one empty slide passes clean; a decoy
+/// A well-formed envelope with one complete slide passes clean; a decoy
 /// `<section class="slide">` and `<img>` living inside an HTML comment are
 /// stripped up front and ignored.
 test "good envelope passes; commented decoys ignored" {
@@ -207,6 +207,35 @@ test "slide structure defects each map to their code" {
     sections=slide_of(eyebrow("01"), "", pageno("project \u{b7} 1 / 1")),
   )
   json_inspect(validate_deck(no_entry, "project", no_assets()).codes(), content=[
+    "slide.no_entry",
+  ])
+}
+
+///|
+/// Frame checks are fail-closed against attribute-embedded tag literals: a
+/// `<style></style>` sitting inside a quoted attribute value, with no real
+/// `<style>` element, must NOT satisfy `frame.style`. The quote-aware
+/// `find_all_open_tags` steps over the attribute as part of its host tag, so the
+/// decoy is invisible and `frame.style` fires.
+test "attr-embedded <style> literal does not satisfy frame.style" {
+  let decoy = envelope(style="<div data-x=\"<style></style>\"></div>")
+  json_inspect(validate_deck(decoy, "project", no_assets()).codes(), content=[
+    "frame.style",
+  ])
+}
+
+///|
+/// A `<div class="slide">` wrapper does not hide a real `<section class="slide">`
+/// nested inside it: `scan_deck` descends through the non-section wrapper and
+/// checks the inner slide, so a malformed nested slide (here missing its
+/// `.entry`) still flags rather than escaping validation.
+test "section.slide nested under a div.slide wrapper is still checked" {
+  let wrapped = envelope(
+    sections="<div class=\"slide\">" +
+      slide_of(eyebrow("01"), "", pageno("project \u{b7} 1 / 1")) +
+      "</div>",
+  )
+  json_inspect(validate_deck(wrapped, "project", no_assets()).codes(), content=[
     "slide.no_entry",
   ])
 }

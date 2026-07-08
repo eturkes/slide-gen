@@ -233,3 +233,61 @@ async test "validate_bundle_dir source and quote checks" {
     json_inspect(validate_bundle_dir(gap, "project", root).codes(), content=[])
   }
 }
+
+///|
+/// A provenance array of schema-valid `gap`-status rows, one per id. Their source
+/// checks are skipped, so the ids populate the cross-reference set without any
+/// real cited files.
+fn prov_gap_rows(ids : Array[String]) -> String {
+  let sb = StringBuilder::new()
+  sb.write_char('[')
+  for i in 0..<ids.length() {
+    if i > 0 {
+      sb.write_char(',')
+    }
+    let id = ids[i]
+    sb.write_string(
+      "{\"id\":\"\{id}\",\"slide\":1,\"claim\":\"x\",\"status\":\"gap\"}",
+    )
+  }
+  sb.write_char(']')
+  sb.to_string()
+}
+
+///|
+/// `validate_bundle_dir`'s deck-to-provenance cross-reference: a deck
+/// `data-claim` naming no schema-valid row fires `prov.dangling_claim`, while a
+/// `data-claim` naming a row is silent. The rows are `gap` status so their source
+/// checks are skipped, isolating the cross-reference from the source checks.
+async test "validate_bundle_dir deck cross-reference" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-prov-xref")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    // A data-claim naming no provenance row is dangling.
+    let dangling = make_bundle(
+      root,
+      "dangling",
+      Some(
+        deck_with_entry(
+          entry_of("a", "a", "<span data-claim=\"ghost\">x</span>"),
+        ),
+      ),
+      Some(prov_gap_rows(["c1"])),
+      Some("no gaps\n"),
+    )
+    json_inspect(validate_bundle_dir(dangling, "project", root).codes(), content=[
+      "prov.dangling_claim",
+    ])
+    // A data-claim naming a schema-valid row is clean.
+    let tagged = make_bundle(
+      root,
+      "tagged",
+      Some(
+        deck_with_entry(entry_of("a", "a", "<span data-claim=\"c1\">x</span>")),
+      ),
+      Some(prov_gap_rows(["c1"])),
+      Some("no gaps\n"),
+    )
+    json_inspect(validate_bundle_dir(tagged, "project", root).codes(), content=[])
+  }
+}

@@ -166,3 +166,12 @@ test "resolve_src and is_inside anchor paths" {
   assert_true(is_inside("/b", "/b/"))
   assert_false(is_inside("/bx", "/b/"))
 }
+
+///|
+/// `find_data_claims` collects `data-claim` values at every nesting depth in
+/// document order — an outer element, a nested child, and a void `<img>` — and
+/// walks tag by tag so close tags are skipped.
+test "find_data_claims collects at every depth" {
+  let doc = "<div data-claim=\"a\"><span data-claim=\"b\">1</span></div><img data-claim=\"c\">".to_array()
+  json_inspect(find_data_claims(doc, 0, doc.length()), content=["a", "b", "c"])
+}

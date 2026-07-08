@@ -325,31 +325,38 @@ async fn check_row(
 /// is schema-checked via `parse_row` (a failing row pushes `prov.schema` with its
 /// reason) and, when schema-valid, source-checked via `check_row` against files
 /// under `src_base` (self-citations resolved relative to `bundle_dir`). This is
-/// `async` because `check_row` reads the cited source files.
+/// `async` because `check_row` reads the cited source files. Returns the set of
+/// schema-valid row ids (empty on a parse failure) for the deck cross-reference to
+/// match `data-claim` attributes against.
 async fn check_provenance(
   prov_text : String,
   bundle_dir : String,
   src_base : String,
   out : Report,
-) -> Unit {
+) -> @set.Set[String] {
+  let ids : @set.Set[String] = @set.Set([])
   let j = try @json.parse(prov_text) catch {
     _ => {
       out.findings.push(must("prov.parse", "provenance.json is not valid JSON"))
-      return
+      return ids
     }
   } noraise {
     j => j
   }
   guard j is Json::Array(rows) else {
     out.findings.push(must("prov.parse", "provenance.json is not a JSON array"))
-    return
+    return ids
   }
   for row in rows {
     match parse_row(row) {
       Invalid(reason) => out.findings.push(must("prov.schema", reason))
-      Valid(r) => check_row(r, bundle_dir, src_base, out)
+      Valid(r) => {
+        ids.add(r.id)
+        check_row(r, bundle_dir, src_base, out)
+      }
     }
   }
+  ids
 }
 
 ///|
@@ -375,10 +382,61 @@ fn check_gaps(text : String, out : Report) -> Unit {
 }
 
 ///|
+/// Collect every `data-claim` attribute value carried by an open tag in
+/// `doc[start:end]`, in document order and at any depth. Runs on the cleaned deck
+/// (comments and raw-text content already blanked) and walks tag by tag via
+/// `scan_open_tag`/`skip_tag`, so a `data-claim`-shaped run inside an attribute
+/// value or a comment is never mistaken for a real attribute.
+fn find_data_claims(doc : Array[Char], start : Int, end : Int) -> Array[String] {
+  let out : Array[String] = []
+  let mut i = start
+  while i < end {
+    if doc[i] == '<' {
+      if i + 1 < end && (doc[i + 1] == '/' || doc[i + 1] == '!') {
+        i = skip_tag(doc, i, end)
+      } else {
+        let (_, lo, hi, past_gt) = scan_open_tag(doc, i)
+        match get_attr(doc, lo, hi, "data-claim") {
+          Some(id) => out.push(id)
+          None => ()
+        }
+        i = past_gt
+      }
+    } else {
+      i = i + 1
+    }
+  }
+  out
+}
+
+///|
+/// Cross-reference the deck against the provenance rows: every deck `data-claim`
+/// must name a schema-valid provenance row `id`, else `prov.dangling_claim` — a
+/// deck claim with no evidence row. (M2.2b-ii extends this with the SHOULD
+/// coverage warnings for untagged numbers and uncited assets.)
+fn check_deck_crossref(
+  doc : Array[Char],
+  row_ids : @set.Set[String],
+  out : Report,
+) -> Unit {
+  for id in find_data_claims(doc, 0, doc.length()) {
+    if !row_ids.contains(id) {
+      out.findings.push(
+        must(
+          "prov.dangling_claim",
+          "deck data-claim \{id} names no provenance row",
+        ),
+      )
+    }
+  }
+}
+
+///|
 /// Validate a whole deck bundle rooted at `bundle_dir`, accumulating every
 /// finding into one `Report`: the deck itself (envelope, slide-structure,
 /// slide-text, entry/furigana, and image contract via `validate_deck`), its
-/// `provenance.json` schema, and its `gaps.md` disclosure. A missing
+/// `provenance.json` schema, its `gaps.md` disclosure, and the deck-to-provenance
+/// cross-reference (every deck `data-claim` names a schema-valid row). A missing
 /// `provenance.json` or `gaps.md` is itself a `Must` finding (`prov.missing` /
 /// `gaps.missing`) — a bundle must ship both. `src_base` is the root the
 /// provenance source paths resolve against; the per-row source and quote checks
@@ -392,10 +450,11 @@ pub async fn validate_bundle_dir(
   let assets = list_assets(bundle_dir)
   let out = validate_deck(html, slug, assets)
   let prov_path = "\{bundle_dir}/provenance.json"
-  if @fs.exists(prov_path) {
+  let row_ids : @set.Set[String] = if @fs.exists(prov_path) {
     check_provenance(@fs.read_file(prov_path).text(), bundle_dir, src_base, out)
   } else {
     out.findings.push(must("prov.missing", "bundle has no provenance.json"))
+    @set.Set([])
   }
   let gaps_path = "\{bundle_dir}/gaps.md"
   if @fs.exists(gaps_path) {
@@ -403,5 +462,7 @@ pub async fn validate_bundle_dir(
   } else {
     out.findings.push(must("gaps.missing", "bundle has no gaps.md"))
   }
+  let doc = strip_raw_text(strip_comments(html.to_array()))
+  check_deck_crossref(doc, row_ids, out)
   out
 }

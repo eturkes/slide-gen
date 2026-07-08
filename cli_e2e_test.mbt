@@ -165,8 +165,11 @@ async test "generate dry-run end-to-end" {
     let text = out.text()
     assert_true(text.contains("codex exec"))
     assert_true(text.contains("--dangerously-bypass-approvals-and-sandbox"))
-    assert_true(text.contains("decks/projA.partial"))
+    assert_true(text.contains("decks/.partial/projA"))
     assert_true(text.contains("--- prompt (stdin) ---"))
+    // `print` (not `println`) the renderer -> exactly one trailing newline, with
+    // no blank final line doubling the renderer's own.
+    assert_false(text.has_suffix("\n\n"))
 
     // unknown project -> exit 1 like enable, message on stderr.
     let (code, _, err) = @process.collect_output(

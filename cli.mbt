@@ -41,7 +41,7 @@ pub fn cli() -> @argparse.Command {
       ),
       @argparse.Command(
         "generate",
-        about="Generate a sibling project's slide deck via codex.",
+        about="Generate a sibling project's deck via codex (--dry-run previews).",
         flags=[
           @argparse.FlagArg(
             "dry-run",

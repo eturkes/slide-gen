@@ -105,7 +105,7 @@ async fn main {
           )
         }
         match sub.flags.get("dry-run") {
-          Some(true) => println(@lib.render_dry_run(root, target))
+          Some(true) => @stdio.stdout.write(@lib.render_dry_run(root, target))
           _ =>
             die(
               "slide-gen: live deck generation lands in a later unit; rerun with --dry-run to preview the invocation\n",

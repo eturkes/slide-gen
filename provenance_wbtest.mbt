@@ -15,8 +15,37 @@ fn pj(s : String) -> Json {
 /// Collapse a `parse_row` outcome to a string: `ok` for `Valid`, else the reason.
 fn row_result(row : Json) -> String {
   match parse_row(row) {
-    Valid => "ok"
+    Valid(_) => "ok"
     Invalid(reason) => reason
+  }
+}
+
+///|
+/// Collapse a `parse_src_ref` outcome to `path|start|end`, or `none`.
+fn ref_str(s : String) -> String {
+  match parse_src_ref(s) {
+    Some((p, a, b)) => "\{p}|\{a}|\{b}"
+    None => "none"
+  }
+}
+
+///|
+/// Collapse a `line_slice` outcome to its text with newlines shown as `/`, or
+/// `none` — keeping multi-line goldens on one source line.
+fn slice_str(content : String, a : Int, b : Int) -> String {
+  match line_slice(content, a, b) {
+    Some(s) => {
+      let sb = StringBuilder::new()
+      for c in s.to_array() {
+        if c == '\n' {
+          sb.write_char('/')
+        } else {
+          sb.write_char(c)
+        }
+      }
+      sb.to_string()
+    }
+    None => "none"
   }
 }
 
@@ -79,4 +108,56 @@ test "check_gaps disclosure" {
   json_inspect(gaps_codes("Open gaps:\n- \u{7528}\u{8a9e}: reason\n"), content=[])
   json_inspect(gaps_codes("No Gaps\n"), content=[])
   json_inspect(gaps_codes("This deck is complete.\n"), content=["gaps.empty"])
+}
+
+///|
+/// `parse_src_ref` splits the path at the LAST colon (so a colon-bearing path
+/// survives) and the range at its FIRST dash, and rejects a reversed range, a
+/// non-positive start, and a missing dash or colon.
+test "parse_src_ref splits path and range" {
+  inspect(ref_str("a.md:2-5"), content="a.md|2|5")
+  inspect(ref_str("a:b.md:1-2"), content="a:b.md|1|2")
+  inspect(ref_str("x:5-2"), content="none")
+  inspect(ref_str("x:0-1"), content="none")
+  inspect(ref_str("x:5"), content="none")
+  inspect(ref_str("x"), content="none")
+}
+
+///|
+/// `line_slice` returns an inclusive 1-based line range, joins multiple lines,
+/// counts the trailing-newline empty segment, and rejects an out-of-range end.
+test "line_slice extracts inclusive line ranges" {
+  let content = "l1\nl2\nl3\nl4\n"
+  inspect(slice_str(content, 2, 3), content="l2/l3")
+  inspect(slice_str(content, 1, 1), content="l1")
+  inspect(slice_str(content, 3, 9), content="none")
+  inspect(slice_str("a\nb\n", 2, 2), content="b")
+}
+
+///|
+/// `contains_substring` finds literal substrings in codepoint space (so a
+/// Japanese needle matches at character boundaries), treats an empty needle as
+/// present, and reports a longer-than-haystack needle as absent.
+test "contains_substring literal search" {
+  assert_true(contains_substring("beta gamma", "beta"))
+  assert_false(contains_substring("beta gamma", "zzz"))
+  assert_true(contains_substring("anything", ""))
+  assert_true(
+    contains_substring(
+      "\u{5b66}\u{7fd2}\u{3068}\u{8a18}\u{61b6}", "\u{8a18}\u{61b6}",
+    ),
+  )
+  assert_false(contains_substring("\u{5b66}\u{7fd2}", "\u{8a18}\u{61b6}"))
+}
+
+///|
+/// `resolve_src` hangs a relative path off the base and leaves an absolute path
+/// alone; `is_inside` matches at a segment boundary, so `/bx` is not inside `/b`.
+test "resolve_src and is_inside anchor paths" {
+  inspect(resolve_src("a.md", "/base"), content="/base/a.md")
+  inspect(resolve_src("/abs/a.md", "/base"), content="/abs/a.md")
+  assert_true(is_inside("/b/x", "/b"))
+  assert_true(is_inside("/b", "/b"))
+  assert_false(is_inside("/bx", "/b"))
+  assert_false(is_inside("/other/x", "/b"))
 }

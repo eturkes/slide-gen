@@ -1,13 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 ///|
-/// The outcome of schema-checking one `provenance.json` row: `Valid` if the row
-/// satisfies the shape contract, or `Invalid(reason)` carrying a human-readable
-/// reason. M2.2a-i checks shape only; the source-reference and quote-grep checks
-/// that carry the row payload arrive in M2.2a-ii, which grows `Valid` a payload.
+/// The outcome of schema-checking one `provenance.json` row: `Valid(row)`
+/// carrying the captured `ProvRow` for the source and quote checks, or
+/// `Invalid(reason)` carrying a human-readable reason. Schema-checking proves the
+/// row's shape; `check_row` then proves its source reference and quote against
+/// the cited file.
 priv enum RowParse {
-  Valid
+  Valid(ProvRow)
   Invalid(String)
+}
+
+///|
+/// A schema-valid row's fields that the source and quote checks read: its `id`
+/// (names the row in a finding), `status` (a `gap` row is skipped as
+/// unverifiable), and the optional `src`/`quote` (a non-`gap` row carries both,
+/// proven non-empty by `parse_row`; a `gap` row may omit them). `slide` and
+/// `claim` are validated present by `parse_row` but unread afterward, so they are
+/// not stored.
+priv struct ProvRow {
+  id : String
+  status : String
+  src : String?
+  quote : String?
 }
 
 ///|
@@ -22,7 +37,7 @@ fn parse_row(row : Json) -> RowParse {
   guard row is Json::Object(m) else {
     return Invalid("provenance row is not a JSON object")
   }
-  guard m.get("id") is Some(Json::String(_)) else {
+  guard m.get("id") is Some(Json::String(id)) else {
     return Invalid("provenance row is missing a string id")
   }
   match m.get("slide") {
@@ -38,32 +53,255 @@ fn parse_row(row : Json) -> RowParse {
   if status != "verified" && status != "inferred" && status != "gap" {
     return Invalid("provenance row has an unknown status: \{status}")
   }
+  let src = match m.get("src") {
+    Some(Json::String(s)) => Some(s)
+    _ => None
+  }
+  let quote = match m.get("quote") {
+    Some(Json::String(q)) => Some(q)
+    _ => None
+  }
   if status != "gap" {
-    guard m.get("src") is Some(Json::String(src)) else {
+    guard src is Some(s) else {
       return Invalid("provenance row is missing a string src")
     }
-    if src == "" {
+    if s == "" {
       return Invalid("provenance row has an empty src")
     }
-    guard m.get("quote") is Some(Json::String(quote)) else {
+    guard quote is Some(q) else {
       return Invalid("provenance row is missing a string quote")
     }
-    if quote == "" {
+    if q == "" {
       return Invalid("provenance row has an empty quote")
     }
   }
-  Valid
+  Valid(ProvRow::{ id, status, src, quote })
+}
+
+///|
+/// Parse a non-empty run of ASCII digits as a positive decimal, or `None` if it
+/// is empty, holds a non-digit, or is long enough to overflow a 32-bit `Int` (a
+/// line number never needs ten digits). Leading zeros are accepted.
+fn parse_int(s : String) -> Int? {
+  let cs = s.to_array()
+  let n = cs.length()
+  if n == 0 || n > 9 {
+    return None
+  }
+  let mut v = 0
+  for c in cs {
+    if !is_ascii_digit(c) {
+      return None
+    }
+    v = v * 10 + (c.to_int() - '0'.to_int())
+  }
+  Some(v)
+}
+
+///|
+/// Split a `path:Lstart-Lend` source reference into its path and inclusive line
+/// range. The path is split off at the LAST colon, so a path that itself holds a
+/// colon (a URL scheme, a drive letter) survives; the range is split at its FIRST
+/// dash into two decimals. Returns `None` unless both parse and form a forward
+/// 1-based range (`start >= 1`, `end >= start`) — rejecting a missing colon or
+/// dash, a non-positive start, and a reversed range.
+fn parse_src_ref(src : String) -> (String, Int, Int)? {
+  let cs = src.to_array()
+  let n = cs.length()
+  let mut colon = -1
+  for i in 0..<n {
+    if cs[i] == ':' {
+      colon = i
+    }
+  }
+  if colon < 0 {
+    return None
+  }
+  let mut dash = -1
+  for i in (colon + 1)..<n {
+    if cs[i] == '-' {
+      dash = i
+      break
+    }
+  }
+  if dash < 0 {
+    return None
+  }
+  let path = range_to_string(cs, 0, colon)
+  let start = parse_int(range_to_string(cs, colon + 1, dash))
+  let end = parse_int(range_to_string(cs, dash + 1, n))
+  match (start, end) {
+    (Some(s), Some(e)) =>
+      if s >= 1 && e >= s {
+        Some((path, s, e))
+      } else {
+        None
+      }
+    _ => None
+  }
+}
+
+///|
+/// Extract the inclusive 1-based line range `[start, end]` from `content` as a
+/// newline-joined string, or `None` if the range falls outside the file. Lines
+/// are the `\n`-split segments (a trailing newline yields a final empty segment,
+/// counted in the length), so a citation past the last line is rejected rather
+/// than silently clamped.
+fn line_slice(content : String, start : Int, end : Int) -> String? {
+  let lines = content.split("\n").to_array()
+  let len = lines.length()
+  if start < 1 || end < start || end > len {
+    return None
+  }
+  let sb = StringBuilder::new()
+  for i in (start - 1)..<end {
+    if i > start - 1 {
+      sb.write_char('\n')
+    }
+    sb.write_stringview(lines[i])
+  }
+  Some(sb.to_string())
+}
+
+///|
+/// Whether `needle` occurs literally within `hay`, compared in codepoint space so
+/// a multibyte Japanese quote matches at character boundaries. An empty needle
+/// matches everywhere; a needle longer than the haystack cannot match.
+fn contains_substring(hay : String, needle : String) -> Bool {
+  let h = hay.to_array()
+  let nd = needle.to_array()
+  let hn = h.length()
+  let nn = nd.length()
+  if nn == 0 {
+    return true
+  }
+  if nn > hn {
+    return false
+  }
+  for i in 0..<(hn - nn + 1) {
+    let mut ok = true
+    for k in 0..<nn {
+      if h[i + k] != nd[k] {
+        ok = false
+        break
+      }
+    }
+    if ok {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Resolve a provenance source path against `base`: an absolute path (leading
+/// `/`) stands alone; a relative path hangs off `base`, the root the deck's
+/// sources are cited relative to.
+fn resolve_src(path : String, base : String) -> String {
+  if path.has_prefix("/") {
+    path
+  } else {
+    "\{base}/\{path}"
+  }
+}
+
+///|
+/// Whether `path` lies at or under `dir`, matched at a segment boundary so a
+/// sibling sharing a name prefix (`/b` vs `/bx`) is not counted inside. Guards
+/// the self-citation check: a row must cite a source OUTSIDE the generated
+/// bundle, never one of the bundle's own files.
+fn is_inside(path : String, dir : String) -> Bool {
+  path == dir || path.has_prefix("\{dir}/")
+}
+
+///|
+/// Verify one schema-valid row's source reference against the cited file, pushing
+/// a `Must` finding (named by the row `id`) for each failure. A `gap` row is
+/// unverifiable and skipped. Otherwise `src` must parse as `path:Lstart-Lend`
+/// (`prov.src_range`), must resolve OUTSIDE the bundle (`prov.self_citation` — no
+/// row may cite a generated bundle file), must name an existing file
+/// (`prov.src_missing`), must span an in-bounds line range (`prov.src_range`),
+/// and that line slice must literally contain `quote` (`prov.quote`). This is an
+/// existence check that kills invented quotes and fabricated citations, NOT a
+/// truth check — misattribution and cherry-picking still pass to human review.
+async fn check_row(
+  r : ProvRow,
+  bundle_dir : String,
+  src_base : String,
+  out : Report,
+) -> Unit {
+  guard r.status != "gap" else { return }
+  guard r.src is Some(src) else { return }
+  guard r.quote is Some(quote) else { return }
+  match parse_src_ref(src) {
+    None =>
+      out.findings.push(
+        must(
+          "prov.src_range",
+          "row \{r.id}: src is not a path:Lstart-Lend reference",
+        ),
+      )
+    Some((path, start, end)) => {
+      let resolved = resolve_src(path, src_base)
+      if is_inside(resolved, bundle_dir) {
+        out.findings.push(
+          must(
+            "prov.self_citation",
+            "row \{r.id}: src cites a file inside the bundle",
+          ),
+        )
+        return
+      }
+      if !@fs.exists(resolved) {
+        out.findings.push(
+          must(
+            "prov.src_missing",
+            "row \{r.id}: src file does not exist: \{path}",
+          ),
+        )
+        return
+      }
+      let text = try @fs.read_file(resolved).text() catch {
+        _ => ""
+      } noraise {
+        t => t
+      }
+      match line_slice(text, start, end) {
+        None =>
+          out.findings.push(
+            must(
+              "prov.src_range",
+              "row \{r.id}: src line range is out of bounds",
+            ),
+          )
+        Some(slice) =>
+          if !contains_substring(slice, quote) {
+            out.findings.push(
+              must(
+                "prov.quote",
+                "row \{r.id}: quote does not occur in the cited line range",
+              ),
+            )
+          }
+      }
+    }
+  }
 }
 
 ///|
 /// Validate a bundle's `provenance.json` text, pushing a `Must` finding per
 /// problem into `out`. The document must parse as a JSON array (`prov.parse`
 /// otherwise, covering both a syntax error and a non-array top level); each row
-/// is schema-checked via `parse_row`, and a failing row pushes `prov.schema`
-/// with its reason. This stays a plain (non-`async`) fn — it only parses and
-/// walks JSON; M2.2a-ii promotes it to `async` once it adds the per-row source
-/// check that reads files.
-fn check_provenance(prov_text : String, out : Report) -> Unit {
+/// is schema-checked via `parse_row` (a failing row pushes `prov.schema` with its
+/// reason) and, when schema-valid, source-checked via `check_row` against files
+/// under `src_base` (self-citations resolved relative to `bundle_dir`). This is
+/// `async` because `check_row` reads the cited source files.
+async fn check_provenance(
+  prov_text : String,
+  bundle_dir : String,
+  src_base : String,
+  out : Report,
+) -> Unit {
   let j = try @json.parse(prov_text) catch {
     _ => {
       out.findings.push(must("prov.parse", "provenance.json is not valid JSON"))
@@ -79,7 +317,7 @@ fn check_provenance(prov_text : String, out : Report) -> Unit {
   for row in rows {
     match parse_row(row) {
       Invalid(reason) => out.findings.push(must("prov.schema", reason))
-      Valid => ()
+      Valid(r) => check_row(r, bundle_dir, src_base, out)
     }
   }
 }
@@ -113,20 +351,19 @@ fn check_gaps(text : String, out : Report) -> Unit {
 /// `provenance.json` schema, and its `gaps.md` disclosure. A missing
 /// `provenance.json` or `gaps.md` is itself a `Must` finding (`prov.missing` /
 /// `gaps.missing`) — a bundle must ship both. `src_base` is the root the
-/// provenance source paths resolve against; M2.2a-ii wires the per-row source
-/// checks that consume it. Raises if `deck.html` is unreadable.
+/// provenance source paths resolve against; the per-row source and quote checks
+/// read the cited files under it. Raises if `deck.html` is unreadable.
 pub async fn validate_bundle_dir(
   bundle_dir : String,
   slug : String,
   src_base : String,
 ) -> Report {
-  let _ = src_base
   let html = @fs.read_file("\{bundle_dir}/deck.html").text()
   let assets = list_assets(bundle_dir)
   let out = validate_deck(html, slug, assets)
   let prov_path = "\{bundle_dir}/provenance.json"
   if @fs.exists(prov_path) {
-    check_provenance(@fs.read_file(prov_path).text(), out)
+    check_provenance(@fs.read_file(prov_path).text(), bundle_dir, src_base, out)
   } else {
     out.findings.push(must("prov.missing", "bundle has no provenance.json"))
   }

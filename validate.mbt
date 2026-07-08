@@ -2,9 +2,8 @@
 
 ///|
 /// Severity of a validator `Finding`: `Must` blocks a bundle, `Should` warns.
-/// M2.1's checks are all `Must`; the `Should` variant is reserved for the
-/// provenance warnings introduced in M2.2, so it is defined but not yet
-/// constructed.
+/// M2.1's checks are all `Must`; the `Should` variant is constructed by the
+/// M2.2 provenance coverage warnings (untagged numbers, uncited assets).
 pub(all) enum Severity {
   Must
   Should
@@ -30,6 +29,13 @@ pub(all) struct Report {
 /// Construct a blocking (`Must`) finding.
 fn must(code : String, detail : String) -> Finding {
   Finding::{ severity: Must, code, detail }
+}
+
+///|
+/// Construct an advisory (`Should`) finding — a warning that does not block a
+/// bundle. First used by the M2.2 provenance coverage warnings.
+fn should(code : String, detail : String) -> Finding {
+  Finding::{ severity: Should, code, detail }
 }
 
 ///|
@@ -631,12 +637,15 @@ fn classify_tag(doc : Array[Char], i : Int, end : Int) -> (String, Bool, Int) {
 // -- Element discovery -------------------------------------------------------
 
 ///|
-/// A matched element: the class `token` it matched on and the half-open
-/// `[lo, hi)` span of its inner HTML (between the open tag's `>` and the close
-/// tag's `<`). The tag name is filtered inside `find_by_class` (via `want_tag`),
-/// so callers never need it on the result.
+/// A matched element: the class `token` it matched on, the `open_lt` index of
+/// its own opening `<` (so a check can scan the element's own attributes, not
+/// only its descendants — e.g. a `data-claim` on the `.entry`/`.cap` itself),
+/// and the half-open `[lo, hi)` span of its inner HTML (between the open tag's
+/// `>` and the close tag's `<`). The tag name is filtered inside `find_by_class`
+/// (via `want_tag`), so callers never need it on the result.
 priv struct Elem {
   token : String
+  open_lt : Int
   lo : Int
   hi : Int
 }
@@ -689,7 +698,12 @@ fn find_by_class(
           Some(tk) =>
             if want_tag == "" || want_tag == tag {
               let (close_lt, close_past) = match_close(doc, tag, past_gt, end)
-              out.push(Elem::{ token: tk, lo: past_gt, hi: close_lt })
+              out.push(Elem::{
+                token: tk,
+                open_lt: i,
+                lo: past_gt,
+                hi: close_lt,
+              })
               i = close_past
             } else {
               // Right class, wrong tag: descend so a nested wanted element

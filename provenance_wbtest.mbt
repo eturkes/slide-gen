@@ -173,7 +173,7 @@ test "resolve_src and is_inside anchor paths" {
 /// walks tag by tag so close tags are skipped.
 test "find_data_claims collects at every depth" {
   let doc = "<div data-claim=\"a\"><span data-claim=\"b\">1</span></div><img data-claim=\"c\">".to_array()
-  json_inspect(find_data_claims(doc), content=["a", "b", "c"])
+  json_inspect(find_data_claims(doc, 0, doc.length()), content=["a", "b", "c"])
 }
 
 ///|
@@ -184,5 +184,78 @@ test "find_data_claims collects at every depth" {
 /// carries nothing. Only the two genuine open-tag attributes come back.
 test "find_data_claims skips decoys and treats a text `<` as text" {
   let doc = "<div title=\"data-claim=decoy\">5 < 6 <span data-claim=\"real\">x</span></div><img data-claim=\"v\">".to_array()
-  json_inspect(find_data_claims(doc), content=["real", "v"])
+  json_inspect(find_data_claims(doc, 0, doc.length()), content=["real", "v"])
+}
+
+///|
+/// Run `check_deck_crossref` over a fragment's cleaned HTML and return the codes,
+/// so the cross-reference checks can be exercised without a bundle on disk.
+fn crossref_codes(
+  html : String,
+  assets : Array[String],
+  row_ids : Array[String],
+) -> Array[String] {
+  let doc = strip_raw_text(strip_comments(html.to_array()))
+  let out = Report::{ findings: [] }
+  check_deck_crossref(doc, @set.Set(assets[:]), @set.Set(row_ids[:]), out)
+  out.codes()
+}
+
+///|
+/// The cross-reference's claim linkage and untagged-number warning: a
+/// `data-claim` on the element itself exempts a numbered `.entry` (proving the
+/// scan covers the element's own tag via `open_lt`, not just its descendants); a
+/// `data-claim` naming no row still dangles even when tagged; and a bare numbered
+/// `.entry` warns `prov.untagged_number`.
+test "check_deck_crossref claim linkage and untagged numbers" {
+  // A data-claim on the .entry itself exempts its number.
+  json_inspect(
+    crossref_codes("<div class=\"entry\" data-claim=\"c1\">25</div>", [], ["c1"]),
+    content=[],
+  )
+  // A data-claim naming no row dangles (and, being tagged, is not untagged).
+  json_inspect(
+    crossref_codes("<div class=\"entry\" data-claim=\"ghost\">25</div>", [], [
+      "c1",
+    ]),
+    content=["prov.dangling_claim"],
+  )
+  // A numbered .entry with no data-claim warns.
+  json_inspect(crossref_codes("<div class=\"entry\">25</div>", [], []), content=[
+    "prov.untagged_number",
+  ])
+}
+
+///|
+/// The asset-citation warning: an `<img>` whose `data-claim` names a schema-valid
+/// row cites its PNG; the same `<img>` without a `data-claim` leaves the PNG
+/// uncited; and a non-PNG asset is never flagged (the `.png` filter).
+test "check_deck_crossref asset citation" {
+  // A data-claim <img> naming a row cites its asset.
+  json_inspect(
+    crossref_codes(
+      "<img src=\"assets/z.png\" data-claim=\"c1\">",
+      ["assets/z.png"],
+      ["c1"],
+    ),
+    content=[],
+  )
+  // The same <img> without a data-claim leaves the asset uncited.
+  json_inspect(
+    crossref_codes("<img src=\"assets/z.png\">", ["assets/z.png"], []),
+    content=["prov.asset_uncited"],
+  )
+  // A non-PNG asset is never flagged.
+  json_inspect(crossref_codes("<div></div>", ["assets/data.csv"], []), content=[])
+}
+
+///|
+/// `has_number` detects a decimal digit, ASCII or fullwidth (U+FF10-FF19), and
+/// nothing else.
+test "has_number detects ASCII and fullwidth digits" {
+  assert_true(has_number("2024"))
+  assert_true(has_number("about 5"))
+  assert_true(has_number("\u{FF11}")) // fullwidth 1
+  assert_false(has_number("no digits"))
+  assert_false(has_number(""))
 }

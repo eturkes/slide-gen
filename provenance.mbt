@@ -382,20 +382,24 @@ fn check_gaps(text : String, out : Report) -> Unit {
 }
 
 ///|
-/// Collect every `data-claim` attribute value carried by an open tag in `doc`,
-/// in document order and at any depth. An open tag is recognized only when a
-/// letter follows `<` (mirroring `find_all_open_tags`), so a literal `<` in text
+/// Collect every `data-claim` attribute value carried by an open tag within the
+/// half-open range `doc[start:end]`, in document order and at any depth. The
+/// dangling-claim scan passes the whole cleaned deck (`0, doc.length()`); the
+/// coverage check passes one element's own span (`el.open_lt, el.hi`) to ask
+/// whether that element or a descendant carries a claim — within such a nested
+/// span every descendant tag closes before `end`, so no open tag straddles the
+/// bound and the range is honest. An open tag is recognized only when a letter
+/// follows `<` (mirroring `find_all_open_tags`), so a literal `<` in text
 /// (`5 < 6`) is not read as a tag and a `data-claim`-shaped run in prose after it
 /// is not collected; `get_attr` skips a `data-claim`-shaped run inside another
 /// attribute's quoted value. Close tags and `<!...>` are stepped over via
 /// `skip_tag`. Runs on the cleaned deck (comments and raw-text content blanked
 /// upstream), so no `<` inside CSS/JS reaches this scan.
-fn find_data_claims(doc : Array[Char]) -> Array[String] {
+fn find_data_claims(doc : Array[Char], start : Int, end : Int) -> Array[String] {
   let out : Array[String] = []
-  let n = doc.length()
-  let mut i = 0
-  while i < n {
-    if doc[i] == '<' && i + 1 < n && is_ascii_letter(doc[i + 1]) {
+  let mut i = start
+  while i < end {
+    if doc[i] == '<' && i + 1 < end && is_ascii_letter(doc[i + 1]) {
       let (_, lo, hi, past_gt) = scan_open_tag(doc, i)
       match get_attr(doc, lo, hi, "data-claim") {
         Some(id) => out.push(id)
@@ -403,9 +407,9 @@ fn find_data_claims(doc : Array[Char]) -> Array[String] {
       }
       i = past_gt
     } else if doc[i] == '<' &&
-      i + 1 < n &&
+      i + 1 < end &&
       (doc[i + 1] == '/' || doc[i + 1] == '!') {
-      i = skip_tag(doc, i, n)
+      i = skip_tag(doc, i, end)
     } else {
       i = i + 1
     }
@@ -414,21 +418,79 @@ fn find_data_claims(doc : Array[Char]) -> Array[String] {
 }
 
 ///|
-/// Cross-reference the deck against the provenance rows: every deck `data-claim`
-/// must name a schema-valid provenance row `id`, else `prov.dangling_claim` — a
-/// deck claim with no evidence row. (M2.2b-ii extends this with the SHOULD
-/// coverage warnings for untagged numbers and uncited assets.)
+/// Whether `s` contains a decimal digit, ASCII (`0`-`9`) or fullwidth
+/// (U+FF10-FF19, common in Japanese text). Used to decide whether a text element
+/// carries a number that ought to be sourced by a `data-claim`.
+fn has_number(s : String) -> Bool {
+  for c in s.to_array() {
+    let o = c.to_int()
+    if is_ascii_digit(c) || (o >= 0xFF10 && o <= 0xFF19) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Cross-reference the deck against the provenance rows — one MUST check plus two
+/// SHOULD coverage warnings:
+///
+/// - `prov.dangling_claim` (MUST): every deck `data-claim` must name a
+///   schema-valid provenance row `id`, else the deck cites evidence that does not
+///   exist.
+/// - `prov.untagged_number` (SHOULD): a `.entry` or `.cap` whose text carries a
+///   number should carry a `data-claim` — on itself or a descendant — so the
+///   figure traces to a source. The scan spans the element's own tag
+///   (`el.open_lt`), so a claim on the element itself counts.
+/// - `prov.asset_uncited` (SHOULD): every committed `assets/*.png` should be
+///   displayed by an `<img>` whose `data-claim` names a schema-valid row.
+///   Iterating the `assets` set also flags an orphan PNG shown by no `<img>`.
 fn check_deck_crossref(
   doc : Array[Char],
+  assets : @set.Set[String],
   row_ids : @set.Set[String],
   out : Report,
 ) -> Unit {
-  for id in find_data_claims(doc) {
+  let n = doc.length()
+  for id in find_data_claims(doc, 0, n) {
     if !row_ids.contains(id) {
       out.findings.push(
         must(
           "prov.dangling_claim",
           "deck data-claim \{id} names no schema-valid provenance row",
+        ),
+      )
+    }
+  }
+  // SHOULD: a numbered .entry/.cap with no data-claim on itself or a descendant.
+  for el in find_by_class(doc, 0, n, ["entry", "cap"]) {
+    if has_number(inner_text(doc, el.lo, el.hi)) &&
+      find_data_claims(doc, el.open_lt, el.hi).length() == 0 {
+      out.findings.push(
+        should(
+          "prov.untagged_number",
+          "a .\{el.token} carries a number with no data-claim",
+        ),
+      )
+    }
+  }
+  // SHOULD: every committed PNG should be shown by a data-claim <img> whose claim
+  // names a schema-valid row.
+  let cited : Array[String] = []
+  for lt in find_all_open_tags(doc, "img") {
+    let (_, lo, hi, _) = scan_open_tag(doc, lt)
+    match (get_attr(doc, lo, hi, "src"), get_attr(doc, lo, hi, "data-claim")) {
+      (Some(src), Some(id)) => if row_ids.contains(id) { cited.push(src) }
+      _ => ()
+    }
+  }
+  let cited_set = @set.Set(cited[:])
+  for asset in assets.iter() {
+    if asset.has_suffix(".png") && !cited_set.contains(asset) {
+      out.findings.push(
+        should(
+          "prov.asset_uncited",
+          "asset \{asset} is displayed by no data-claim <img>",
         ),
       )
     }
@@ -467,6 +529,6 @@ pub async fn validate_bundle_dir(
     out.findings.push(must("gaps.missing", "bundle has no gaps.md"))
   }
   let doc = strip_raw_text(strip_comments(html.to_array()))
-  check_deck_crossref(doc, row_ids, out)
+  check_deck_crossref(doc, assets, row_ids, out)
   out
 }

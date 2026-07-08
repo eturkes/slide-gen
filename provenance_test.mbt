@@ -338,3 +338,62 @@ async test "validate_bundle_dir deck cross-reference" {
     ])
   }
 }
+
+///|
+/// `validate_bundle_dir`'s SHOULD coverage warnings: a numbered `.entry` with no
+/// `data-claim` warns `prov.untagged_number` while a tagged sibling stays silent;
+/// a committed PNG shown by an `<img>` carrying no `data-claim` warns
+/// `prov.asset_uncited`; and a fully-covered bundle (a tagged number plus a cited
+/// `<img>`) passes clean. The rows are `gap` status so their source checks are
+/// skipped, isolating the coverage warnings.
+async test "validate_bundle_dir coverage warnings" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-prov-cov")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    // A numbered .entry with no data-claim warns; a tagged sibling does not.
+    let untagged = make_bundle(
+      root,
+      "untagged",
+      Some(
+        deck_with_entry(
+          entry_of("a", "a", "<span data-claim=\"c1\">25</span>") +
+          entry_of("b", "b", "40"),
+        ),
+      ),
+      Some(prov_gap_rows(["c1"])),
+      Some("no gaps\n"),
+    )
+    json_inspect(validate_bundle_dir(untagged, "project", root).codes(), content=[
+      "prov.untagged_number",
+    ])
+    // A committed PNG shown by an <img> carrying no data-claim is uncited.
+    let uncited = make_bundle(
+      root,
+      "uncited",
+      Some(deck_with_entry(entry() + "<img src=\"assets/f.png\">")),
+      Some(prov_gap_rows(["c1"])),
+      Some("no gaps\n"),
+    )
+    @fs.mkdir("\{uncited}/assets")
+    @fs.write_file("\{uncited}/assets/f.png", "x", create_mode=CreateOrTruncate)
+    json_inspect(validate_bundle_dir(uncited, "project", root).codes(), content=[
+      "prov.asset_uncited",
+    ])
+    // A tagged number and a cited <img> pass clean.
+    let clean = make_bundle(
+      root,
+      "clean",
+      Some(
+        deck_with_entry(
+          entry_of("a", "a", "<span data-claim=\"c1\">25</span>") +
+          "<img src=\"assets/f.png\" data-claim=\"c2\">",
+        ),
+      ),
+      Some(prov_gap_rows(["c1", "c2"])),
+      Some("no gaps\n"),
+    )
+    @fs.mkdir("\{clean}/assets")
+    @fs.write_file("\{clean}/assets/f.png", "x", create_mode=CreateOrTruncate)
+    json_inspect(validate_bundle_dir(clean, "project", root).codes(), content=[])
+  }
+}

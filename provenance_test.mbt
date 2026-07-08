@@ -133,8 +133,9 @@ fn prov_one(status : String, src : String, quote : String) -> String {
 /// `validate_bundle_dir`'s per-row source check: a verified row whose quote
 /// literally occurs in the cited line slice passes; a quote absent from that
 /// slice — even one present elsewhere in the file — fails `prov.quote`; a
-/// citation resolving inside the bundle, to a missing file, or past the file's
-/// line range fails its specific code; and a `gap` row skips the check entirely.
+/// citation resolving inside the bundle, to a missing file, to a directory
+/// rather than a regular file, or past the file's line range fails its specific
+/// code; and a `gap` row skips the check entirely.
 async test "validate_bundle_dir source and quote checks" {
   @async.with_task_group() <| group => {
     let root = @fs.tmpdir(prefix="slide-gen-prov-src")
@@ -145,6 +146,7 @@ async test "validate_bundle_dir source and quote checks" {
       "alpha\nbeta gamma\ndelta\n",
       create_mode=CreateOrTruncate,
     )
+    @fs.mkdir("\{root}/srcdir")
     // Clean: quote "beta" occurs in the cited line 2.
     let clean = make_bundle(
       root,
@@ -208,6 +210,17 @@ async test "validate_bundle_dir source and quote checks" {
     )
     json_inspect(validate_bundle_dir(oor, "project", root).codes(), content=[
       "prov.src_range",
+    ])
+    // A directory exists but is not a regular file that can be quoted.
+    let dircite = make_bundle(
+      root,
+      "dircite",
+      Some(deck),
+      Some(prov_one("verified", "srcdir:1-1", "x")),
+      Some("no gaps\n"),
+    )
+    json_inspect(validate_bundle_dir(dircite, "project", root).codes(), content=[
+      "prov.src_missing",
     ])
     // A gap row carries no verifiable source, so the check is skipped.
     let gap = make_bundle(

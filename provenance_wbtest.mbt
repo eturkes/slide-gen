@@ -112,8 +112,8 @@ test "check_gaps disclosure" {
 
 ///|
 /// `parse_src_ref` splits the path at the LAST colon (so a colon-bearing path
-/// survives) and the range at its FIRST dash, and rejects a reversed range, a
-/// non-positive start, and a missing dash or colon.
+/// survives) and the range at its FIRST dash, and rejects an empty path, a
+/// reversed range, a non-positive start, and a missing dash or colon.
 test "parse_src_ref splits path and range" {
   inspect(ref_str("a.md:2-5"), content="a.md|2|5")
   inspect(ref_str("a:b.md:1-2"), content="a:b.md|1|2")
@@ -121,6 +121,7 @@ test "parse_src_ref splits path and range" {
   inspect(ref_str("x:0-1"), content="none")
   inspect(ref_str("x:5"), content="none")
   inspect(ref_str("x"), content="none")
+  inspect(ref_str(":1-1"), content="none")
 }
 
 ///|
@@ -152,7 +153,8 @@ test "contains_substring literal search" {
 
 ///|
 /// `resolve_src` hangs a relative path off the base and leaves an absolute path
-/// alone; `is_inside` matches at a segment boundary, so `/bx` is not inside `/b`.
+/// alone; `is_inside` matches at a segment boundary, so `/bx` is not inside `/b`,
+/// and it strips trailing slashes on `dir` so `/b/` anchors the same as `/b`.
 test "resolve_src and is_inside anchor paths" {
   inspect(resolve_src("a.md", "/base"), content="/base/a.md")
   inspect(resolve_src("/abs/a.md", "/base"), content="/abs/a.md")
@@ -160,4 +162,7 @@ test "resolve_src and is_inside anchor paths" {
   assert_true(is_inside("/b", "/b"))
   assert_false(is_inside("/bx", "/b"))
   assert_false(is_inside("/other/x", "/b"))
+  assert_true(is_inside("/b/x", "/b/"))
+  assert_true(is_inside("/b", "/b/"))
+  assert_false(is_inside("/bx", "/b/"))
 }

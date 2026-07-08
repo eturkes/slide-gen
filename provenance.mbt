@@ -103,8 +103,8 @@ fn parse_int(s : String) -> Int? {
 /// range. The path is split off at the LAST colon, so a path that itself holds a
 /// colon (a URL scheme, a drive letter) survives; the range is split at its FIRST
 /// dash into two decimals. Returns `None` unless both parse and form a forward
-/// 1-based range (`start >= 1`, `end >= start`) — rejecting a missing colon or
-/// dash, a non-positive start, and a reversed range.
+/// 1-based range (`start >= 1`, `end >= start`) — rejecting an empty path, a
+/// missing colon or dash, a non-positive start, and a reversed range.
 fn parse_src_ref(src : String) -> (String, Int, Int)? {
   let cs = src.to_array()
   let n = cs.length()
@@ -114,7 +114,7 @@ fn parse_src_ref(src : String) -> (String, Int, Int)? {
       colon = i
     }
   }
-  if colon < 0 {
+  if colon < 1 {
     return None
   }
   let mut dash = -1
@@ -207,11 +207,19 @@ fn resolve_src(path : String, base : String) -> String {
 
 ///|
 /// Whether `path` lies at or under `dir`, matched at a segment boundary so a
-/// sibling sharing a name prefix (`/b` vs `/bx`) is not counted inside. Guards
-/// the self-citation check: a row must cite a source OUTSIDE the generated
-/// bundle, never one of the bundle's own files.
+/// sibling sharing a name prefix (`/b` vs `/bx`) is not counted inside. Trailing
+/// slashes on `dir` are stripped first, so a caller that spells `bundle_dir` with
+/// a trailing `/` still anchors the boundary — otherwise a plain self-citation
+/// slips past the prefix test. Guards the self-citation check: a row must cite a
+/// source OUTSIDE the generated bundle, never one of the bundle's own files.
 fn is_inside(path : String, dir : String) -> Bool {
-  path == dir || path.has_prefix("\{dir}/")
+  let cs = dir.to_array()
+  let mut n = cs.length()
+  while n > 0 && cs[n - 1] == '/' {
+    n = n - 1
+  }
+  let d = range_to_string(cs, 0, n)
+  path == d || path.has_prefix("\{d}/")
 }
 
 ///|
@@ -219,8 +227,9 @@ fn is_inside(path : String, dir : String) -> Bool {
 /// a `Must` finding (named by the row `id`) for each failure. A `gap` row is
 /// unverifiable and skipped. Otherwise `src` must parse as `path:Lstart-Lend`
 /// (`prov.src_range`), must resolve OUTSIDE the bundle (`prov.self_citation` — no
-/// row may cite a generated bundle file), must name an existing file
-/// (`prov.src_missing`), must span an in-bounds line range (`prov.src_range`),
+/// row may cite a generated bundle file), must name an existing regular file
+/// (`prov.src_missing` — a missing path, or a directory or device that cannot be
+/// quoted), must span an in-bounds line range (`prov.src_range`),
 /// and that line slice must literally contain `quote` (`prov.quote`). This is an
 /// existence check that kills invented quotes and fabricated citations, NOT a
 /// truth check — misattribution and cherry-picking still pass to human review.
@@ -257,6 +266,27 @@ async fn check_row(
           must(
             "prov.src_missing",
             "row \{r.id}: src file does not exist: \{path}",
+          ),
+        )
+        return
+      }
+      // Read only a regular file. A directory, device, or FIFO cited as a source
+      // would otherwise be handed to `read_file`: a character device or an empty
+      // FIFO can block or exhaust memory before any finding is emitted, and a
+      // directory's read error would masquerade as a quote miss. `@fs.kind`
+      // follows symlinks (matching `read_file`); any stat error classifies the
+      // path as non-regular.
+      let is_regular = try @fs.kind(resolved) catch {
+        _ => false
+      } noraise {
+        @fs.Regular => true
+        _ => false
+      }
+      guard is_regular else {
+        out.findings.push(
+          must(
+            "prov.src_missing",
+            "row \{r.id}: src is not a regular file: \{path}",
           ),
         )
         return

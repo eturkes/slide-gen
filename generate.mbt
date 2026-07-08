@@ -69,7 +69,8 @@ fn join_path(base : String, child : String) -> String {
 /// repo parent, which is also the provenance `src_base`). The whole invocation
 /// is wrapped in `timeout --kill-after` — SIGTERM at the ceiling, then SIGKILL a
 /// short grace later — so even a run that ignores SIGTERM is force-killed rather
-/// than hanging the caller forever. The prompt is delivered on stdin, not in
+/// than hanging the caller forever (callers pass a positive `timeout_secs`;
+/// `timeout 0` would disable the kill). The prompt is delivered on stdin, not in
 /// argv, so it never appears here. `cwd` is a resolved repo-parent path and the
 /// vector is exec'd directly (no shell), so the argv itself needs no quoting.
 pub fn build_codex_argv(

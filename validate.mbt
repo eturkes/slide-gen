@@ -611,11 +611,21 @@ fn classify_tag(doc : Array[Char], i : Int, end : Int) -> (String, Bool, Int) {
   while j < end && is_ascii_letter(doc[j]) {
     j = j + 1
   }
-  let sb = StringBuilder::new()
-  for k in name_start..<j {
-    sb.write_char(lower_ascii(doc[k]))
+  // The letters name a known bare tag only when a name boundary follows; a
+  // name-continuation char (a digit or `-`, as in `<rt2>` or `<ruby-foo>`) marks
+  // a different element, so blank the name to keep it from matching ruby/rt/code
+  // — the same boundary rule `find_all_open_tags` enforces on open tags.
+  let bounded = j >= end || is_space(doc[j]) || doc[j] == '>' || doc[j] == '/'
+  let name = if bounded {
+    let sb = StringBuilder::new()
+    for k in name_start..<j {
+      sb.write_char(lower_ascii(doc[k]))
+    }
+    sb.to_string()
+  } else {
+    ""
   }
-  (sb.to_string(), is_close, skip_tag(doc, i, end))
+  (name, is_close, skip_tag(doc, i, end))
 }
 
 // -- Element discovery -------------------------------------------------------
@@ -1124,6 +1134,19 @@ fn all_kana(s : String) -> Bool {
 }
 
 ///|
+/// Whether `s` holds at least one kana character. Paired with `all_kana`, it
+/// rejects an empty or whitespace-only `<rt>`, which — though vacuously all-kana
+/// — supplies no reading at all.
+fn has_kana(s : String) -> Bool {
+  for c in s.to_array() {
+    if is_kana(c) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 /// Collapse each run of ASCII/HTML whitespace in `s` to a single space and trim
 /// the ends, so two JA tiers compare equal up to insignificant layout whitespace.
 fn collapse_ws(s : String) -> String {
@@ -1178,12 +1201,14 @@ fn normalize_ja(html : String) -> String {
 /// Furigana checks within a `.jpf` tier's inner HTML, in one pass over the
 /// characters while tracking whether the scan is inside a `<ruby>`, an `<rt>`, or
 /// a `<code>` span:
-///  - `ruby.rt_count`: every `<ruby>` must be closed and hold exactly one `<rt>`.
-///  - `ruby.rt_not_kana`: every `<rt>` reading must be all kana.
+///  - `ruby.rt_count`: every `<ruby>` is closed, non-nested, and holds exactly
+///    one `<rt>`; every `<rt>` is closed and lives inside a `<ruby>`.
+///  - `ruby.rt_not_kana`: every `<rt>` reading is non-empty and all kana.
 ///  - `ruby.kanji_uncovered`: every kanji outside a `<code>` span must sit in a
 ///    ruby base (inside `<ruby>` but outside its `<rt>`), so a bare kanji lacking
 ///    furigana flags. Coverage is per kanji CHARACTER, not per run, so a kanji
-///    run split across adjacent ruby groups (要点 as 要 + 点) still passes.
+///    run split across adjacent ruby groups (要点 as 要 + 点) still passes; an
+///    unclosed `<code>` grants no lasting exemption.
 /// Each code is reported at most once.
 fn check_jpf_ruby(html : String, out : Report) -> Unit {
   let cs = html.to_array()
@@ -1196,30 +1221,46 @@ fn check_jpf_ruby(html : String, out : Report) -> Unit {
   let mut bad_rt_count = false
   let mut bad_rt_kana = false
   let mut uncovered = false
+  let mut code_hid_kanji = false
   let mut i = 0
   while i < n {
     if cs[i] == '<' {
       let (name, is_close, past_gt) = classify_tag(cs, i, n)
       match (name, is_close) {
         ("ruby", false) => {
+          // A `<ruby>` opening inside another is malformed for this flat-ruby
+          // convention; flag it rather than let the inner frame's `<rt>` stand
+          // in for the outer's.
+          if in_ruby {
+            bad_rt_count = true
+          }
           in_ruby = true
           rt_in_ruby = 0
         }
         ("ruby", true) => {
-          if rt_in_ruby != 1 {
+          // `in_rt` still set at the close means the `<rt>` never closed, so its
+          // reading went unchecked: treat the ruby as malformed.
+          if rt_in_ruby != 1 || in_rt {
             bad_rt_count = true
           }
           in_ruby = false
           in_rt = false
         }
         ("rt", false) => {
+          // `<rt>` is meaningful only inside a `<ruby>`; a stray one is malformed.
+          if !in_ruby {
+            bad_rt_count = true
+          }
           in_rt = true
           rt_in_ruby = rt_in_ruby + 1
           rt_start = past_gt
         }
         ("rt", true) => {
           in_rt = false
-          if !all_kana(decode_entities(range_to_string(cs, rt_start, i))) {
+          // A reading must carry at least one kana and nothing but kana; an empty
+          // or whitespace-only `<rt>` supplies no furigana.
+          let reading = decode_entities(range_to_string(cs, rt_start, i))
+          if !has_kana(reading) || !all_kana(reading) {
             bad_rt_kana = true
           }
         }
@@ -1229,14 +1270,26 @@ fn check_jpf_ruby(html : String, out : Report) -> Unit {
       }
       i = past_gt
     } else {
-      if !in_rt && is_kanji(cs[i]) && !in_ruby && !in_code {
-        uncovered = true
+      if !in_rt && !in_ruby && is_kanji(cs[i]) {
+        // A kanji exempted only by an open `<code>` is tracked, not cleared: an
+        // unclosed `<code>` must not grant a lasting coverage exemption.
+        if in_code {
+          code_hid_kanji = true
+        } else {
+          uncovered = true
+        }
       }
       i = i + 1
     }
   }
-  if in_ruby {
-    bad_rt_count = true // unclosed <ruby> never reached its close-tag check
+  // End-of-scan structural guards: an unclosed `<ruby>` or `<rt>` never reached
+  // its close-tag check, and an unclosed `<code>` that swallowed a kanji granted
+  // a bogus exemption.
+  if in_ruby || in_rt {
+    bad_rt_count = true
+  }
+  if in_code && code_hid_kanji {
+    uncovered = true
   }
   if bad_rt_count {
     out.findings.push(

@@ -265,3 +265,78 @@ test "scan_deck fills entry tiers" {
   json_inspect(e.tiers.map(fn(t) { t.cls }), content=["jp", "jpf", "en"])
   inspect(e.tiers[1].html, content="<ruby>要<rt>よう</rt></ruby>")
 }
+
+///|
+/// `classify_tag` blanks a tag name that a name-continuation char cuts short, so
+/// `<rt2>` and `<ruby-foo>` cannot masquerade as `<rt>`/`<ruby>`, while a real
+/// `<rt>` (letters then a boundary) still classifies.
+test "classify_tag blanks a non-boundary tag name" {
+  let rt2 = "<rt2>".to_array()
+  let (name_rt2, _, _) = classify_tag(rt2, 0, rt2.length())
+  inspect(name_rt2, content="")
+  let ruby_foo = "<ruby-foo>".to_array()
+  let (name_rf, _, _) = classify_tag(ruby_foo, 0, ruby_foo.length())
+  inspect(name_rf, content="")
+  let real = "<rt>".to_array()
+  let (name_rt, is_close, _) = classify_tag(real, 0, real.length())
+  inspect(name_rt, content="rt")
+  assert_false(is_close)
+}
+
+///|
+/// A fake `<ruby-foo>` tag opens no real ruby, so the kanji it wraps gets no
+/// coverage and flags `ruby.kanji_uncovered` — proof the boundary check keeps
+/// look-alike tags from satisfying the furigana contract.
+test "check_jpf_ruby treats a fake ruby tag as no ruby" {
+  let r = Report::{ findings: [] }
+  check_jpf_ruby("<ruby-foo>要</ruby-foo>", r)
+  json_inspect(r.codes(), content=["ruby.kanji_uncovered"])
+}
+
+///|
+/// A `<ruby>` whose `<rt>` never closes before `</ruby>` would leave the reading
+/// unchecked, so it flags `ruby.rt_count` like the unclosed-`<ruby>` guard.
+test "check_jpf_ruby flags an unclosed rt inside a closed ruby" {
+  let r = Report::{ findings: [] }
+  check_jpf_ruby("<ruby>要<rt>x</ruby>", r)
+  json_inspect(r.codes(), content=["ruby.rt_count"])
+}
+
+///|
+/// An `<rt>` outside any `<ruby>` is malformed and flags `ruby.rt_count`.
+test "check_jpf_ruby flags a stray rt outside ruby" {
+  let r = Report::{ findings: [] }
+  check_jpf_ruby("<rt>よう</rt>", r)
+  json_inspect(r.codes(), content=["ruby.rt_count"])
+}
+
+///|
+/// An empty `<rt>` supplies no reading, so it flags `ruby.rt_not_kana` rather
+/// than passing on vacuous all-kana.
+test "check_jpf_ruby flags an empty rt reading" {
+  let r = Report::{ findings: [] }
+  check_jpf_ruby("<ruby>要<rt></rt></ruby>", r)
+  json_inspect(r.codes(), content=["ruby.rt_not_kana"])
+}
+
+///|
+/// A `<ruby>` nested in another has no independent `<rt>`; nesting flags
+/// `ruby.rt_count` rather than letting the inner rt stand in for the outer.
+test "check_jpf_ruby rejects nested ruby" {
+  let r = Report::{ findings: [] }
+  check_jpf_ruby("<ruby><ruby>要<rt>よう</rt></ruby></ruby>", r)
+  json_inspect(r.codes(), content=["ruby.rt_count"])
+}
+
+///|
+/// An unclosed `<code>` grants no lasting coverage exemption: a kanji it swallows
+/// flags `ruby.kanji_uncovered`, while an unclosed `<code>` holding no kanji stays
+/// clean, so the guard fires on real omissions only.
+test "check_jpf_ruby denies an unclosed code a coverage exemption" {
+  let hid = Report::{ findings: [] }
+  check_jpf_ruby("<code>図要", hid)
+  json_inspect(hid.codes(), content=["ruby.kanji_uncovered"])
+  let empty = Report::{ findings: [] }
+  check_jpf_ruby("<code>abc", empty)
+  json_inspect(empty.codes(), content=[])
+}

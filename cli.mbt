@@ -2,9 +2,10 @@
 
 ///|
 /// Build the root CLI command. `list` shows discovered sibling projects, `status`
-/// their enable/disable state, and `enable`/`disable`/`toggle` mutate the
-/// persisted set for the named project. A subcommand is required; each mutating
-/// subcommand takes exactly one project-name positional.
+/// their enable/disable state, `enable`/`disable`/`toggle` mutate the persisted
+/// set for the named project, and `generate` authors a project's deck via codex
+/// (`--dry-run` previews the invocation). A subcommand is required; each
+/// project-scoped subcommand takes exactly one project-name positional.
 pub fn cli() -> @argparse.Command {
   let name_arg = [
     @argparse.PositionArg(
@@ -36,6 +37,18 @@ pub fn cli() -> @argparse.Command {
       @argparse.Command(
         "toggle",
         about="Flip a sibling project's enabled state.",
+        positionals=name_arg,
+      ),
+      @argparse.Command(
+        "generate",
+        about="Generate a sibling project's slide deck via codex.",
+        flags=[
+          @argparse.FlagArg(
+            "dry-run",
+            long="dry-run",
+            about="Print the exact codex invocation and prompt without running it.",
+          ),
+        ],
         positionals=name_arg,
       ),
     ],

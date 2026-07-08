@@ -96,6 +96,23 @@ async fn main {
           target,
         )
       }
+      Some(("generate", sub)) => {
+        let target = get_name(sub)
+        if !projects.contains(target) {
+          die(
+            "slide-gen: unknown project '\{target}' (run `slide-gen list` to see candidates)\n",
+            1,
+          )
+        }
+        match sub.flags.get("dry-run") {
+          Some(true) => println(@lib.render_dry_run(root, target))
+          _ =>
+            die(
+              "slide-gen: live deck generation lands in a later unit; rerun with --dry-run to preview the invocation\n",
+              1,
+            )
+        }
+      }
       _ => ()
     }
   } catch {

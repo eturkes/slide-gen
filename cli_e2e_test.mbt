@@ -132,3 +132,58 @@ async test "cli end-to-end" {
     assert_eq(code, 2)
   }
 }
+
+///|
+/// End-to-end dry run: `generate --dry-run <candidate>` prints the resolved
+/// invocation and exits 0 with no codex spend; `generate <unknown>` is rejected
+/// (exit 1) like `enable`; and `generate <candidate>` without the flag exits 1
+/// with a forward-pointing message (live generation is a later unit). Gated on
+/// SLIDE_GEN_BIN, so a bare `moon test` is a no-op.
+async test "generate dry-run end-to-end" {
+  guard @env.get_env_var("SLIDE_GEN_BIN") is Some(bin) else { return }
+  @async.with_task_group() <| group => {
+    let tmp = @fs.tmpdir(prefix="slide-gen-gen")
+    group.add_defer(() => @fs.rmdir(tmp, recursive=true))
+    let projects_dir = "\{tmp}/Projects"
+    @fs.mkdir(projects_dir)
+    let repo = "\{projects_dir}/slide-gen"
+    @fs.mkdir(repo)
+    @fs.mkdir("\{projects_dir}/projA")
+    @fs.write_file(
+      "\{repo}/moon.mod",
+      "name = \"eturkes/slide-gen\"\n",
+      create_mode=CreateOrTruncate,
+    )
+
+    // dry run over a candidate -> exit 0, prints the invocation markers.
+    let (code, out, _) = @process.collect_output(
+      bin,
+      ["generate", "--dry-run", "projA"],
+      cwd=repo,
+    )
+    assert_eq(code, 0)
+    let text = out.text()
+    assert_true(text.contains("codex exec"))
+    assert_true(text.contains("--dangerously-bypass-approvals-and-sandbox"))
+    assert_true(text.contains("decks/projA.partial"))
+    assert_true(text.contains("--- prompt (stdin) ---"))
+
+    // unknown project -> exit 1 like enable, message on stderr.
+    let (code, _, err) = @process.collect_output(
+      bin,
+      ["generate", "ghost"],
+      cwd=repo,
+    )
+    assert_eq(code, 1)
+    assert_true(err.text().contains("unknown project"))
+
+    // candidate without --dry-run -> exit 1, forward-pointing message.
+    let (code, _, err) = @process.collect_output(
+      bin,
+      ["generate", "projA"],
+      cwd=repo,
+    )
+    assert_eq(code, 1)
+    assert_true(err.text().contains("--dry-run"))
+  }
+}

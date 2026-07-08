@@ -26,3 +26,18 @@ test "subcommands parse with positionals" {
   guard cli().parse(argv=["status"]).subcommand is Some((status_key, _))
   inspect(status_key, content="status")
 }
+
+///|
+/// `generate` parses to its key with the `name` positional bound, and `--dry-run`
+/// surfaces as a true flag; without the flag `generate` still parses with the
+/// flag absent, so `main` can distinguish a preview from a live run.
+test "generate subcommand parses with dry-run flag" {
+  guard cli().parse(argv=["generate", "--dry-run", "projA"]).subcommand
+    is Some((key, sub))
+  inspect(key, content="generate")
+  guard sub.values.get("name") is Some(names)
+  inspect(names[0], content="projA")
+  assert_true(sub.flags.get("dry-run") is Some(true))
+  guard cli().parse(argv=["generate", "projB"]).subcommand is Some((_, plain))
+  assert_false(plain.flags.get("dry-run") is Some(true))
+}

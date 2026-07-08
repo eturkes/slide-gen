@@ -677,6 +677,174 @@ fn find_by_class(
   out
 }
 
+// -- Text extraction and entity decoding ------------------------------------
+
+///|
+/// The two-digit decimal form of a slide number: `1` -> `01`, `10` -> `10`. The
+/// `.eyebrow .n` check compares against this for a slide's 1-based index.
+fn two_digit(n : Int) -> String {
+  if n < 10 {
+    "0\{n}"
+  } else {
+    "\{n}"
+  }
+}
+
+///|
+/// Trim leading and trailing ASCII/HTML whitespace from `s`; interior whitespace
+/// and non-ASCII spaces (a decoded NBSP is content) are preserved.
+fn trim_ws(s : String) -> String {
+  let cs = s.to_array()
+  let n = cs.length()
+  let mut lo = 0
+  while lo < n && is_space(cs[lo]) {
+    lo = lo + 1
+  }
+  let mut hi = n
+  while hi > lo && is_space(cs[hi - 1]) {
+    hi = hi - 1
+  }
+  range_to_string(cs, lo, hi)
+}
+
+///|
+/// The character an HTML named reference denotes, for the small set the deck
+/// uses (`&amp; &lt; &gt; &quot; &apos; &nbsp; &middot;`), or `None` for any
+/// other name. Names are case-sensitive, matching HTML5's canonical forms.
+fn named_entity(name : String) -> Char? {
+  match name {
+    "amp" => Some('&')
+    "lt" => Some('<')
+    "gt" => Some('>')
+    "quot" => Some('"')
+    "apos" => Some('\'')
+    "nbsp" => Some('\u{a0}')
+    "middot" => Some('\u{b7}')
+    _ => None
+  }
+}
+
+///|
+/// The value of digit `c` in `base` (10 or 16), or `None` if `c` is not a digit
+/// of that base.
+fn hex_val(c : Char, base : Int) -> Int? {
+  let v = if c >= '0' && c <= '9' {
+    c.to_int() - '0'.to_int()
+  } else if c >= 'a' && c <= 'f' {
+    c.to_int() - 'a'.to_int() + 10
+  } else if c >= 'A' && c <= 'F' {
+    c.to_int() - 'A'.to_int() + 10
+  } else {
+    -1
+  }
+  if v >= 0 && v < base {
+    Some(v)
+  } else {
+    None
+  }
+}
+
+///|
+/// Parse an HTML character reference beginning at `&` (index `i`) within
+/// `cs[:n]`, returning the decoded character and the index just past its
+/// terminating `;`, or `None` when the text is not a well-formed reference.
+/// Handles named (`&amp;`), decimal (`&#183;`), and hexadecimal (`&#xB7;`) forms;
+/// a code point above `U+10FFFF` or in the surrogate range is rejected.
+fn parse_entity(cs : Array[Char], i : Int, n : Int) -> (Char, Int)? {
+  if i + 1 >= n {
+    return None
+  }
+  if cs[i + 1] == '#' {
+    let mut j = i + 2
+    let base = if j < n && (cs[j] == 'x' || cs[j] == 'X') {
+      j = j + 1
+      16
+    } else {
+      10
+    }
+    let start = j
+    let mut code = 0
+    while j < n {
+      match hex_val(cs[j], base) {
+        Some(d) => {
+          code = code * base + d
+          if code > 0x10FFFF {
+            return None
+          }
+          j = j + 1
+        }
+        None => break
+      }
+    }
+    if j == start || j >= n || cs[j] != ';' {
+      return None
+    }
+    match code.to_char() {
+      Some(ch) => Some((ch, j + 1))
+      None => None
+    }
+  } else {
+    let start = i + 1
+    let mut j = start
+    while j < n && is_ascii_letter(cs[j]) {
+      j = j + 1
+    }
+    if j == start || j >= n || cs[j] != ';' {
+      return None
+    }
+    match named_entity(range_to_string(cs, start, j)) {
+      Some(ch) => Some((ch, j + 1))
+      None => None
+    }
+  }
+}
+
+///|
+/// Decode every well-formed HTML character reference in `s`; a stray `&` that
+/// does not begin a valid reference is kept literally, so the function is total.
+fn decode_entities(s : String) -> String {
+  let cs = s.to_array()
+  let n = cs.length()
+  let sb = StringBuilder::new()
+  let mut i = 0
+  while i < n {
+    if cs[i] == '&' {
+      match parse_entity(cs, i, n) {
+        Some((ch, next)) => {
+          sb.write_char(ch)
+          i = next
+        }
+        None => {
+          sb.write_char(cs[i])
+          i = i + 1
+        }
+      }
+    } else {
+      sb.write_char(cs[i])
+      i = i + 1
+    }
+  }
+  sb.to_string()
+}
+
+///|
+/// The text content of the element body `doc[lo:hi]`: drop every tag (quote-aware
+/// via `skip_tag`), decode character references, and trim surrounding ASCII
+/// whitespace. Reads an `.eyebrow .n` and a `.pageno` for the slide-text checks.
+fn inner_text(doc : Array[Char], lo : Int, hi : Int) -> String {
+  let sb = StringBuilder::new()
+  let mut i = lo
+  while i < hi {
+    if doc[i] == '<' {
+      i = skip_tag(doc, i, hi)
+    } else {
+      sb.write_char(doc[i])
+      i = i + 1
+    }
+  }
+  trim_ws(decode_entities(sb.to_string()))
+}
+
 // -- Slide model -------------------------------------------------------------
 
 ///|
@@ -686,17 +854,22 @@ priv struct Entry {}
 
 ///|
 /// A parsed `<section class="slide">`: the counts of its `.eyebrow` and `.pageno`
-/// children and its list of `.entry` elements. The counts drive the "exactly one"
-/// checks; the list drives the "at least one entry" check.
+/// children, its list of `.entry` elements, and the text of its first
+/// `.eyebrow .n` and `.pageno` (`None` when absent). Counts drive the
+/// "exactly one" checks, the entry list drives "at least one entry", and the
+/// captured texts drive the slide-number and page-number format checks.
 priv struct Slide {
   eyebrow_count : Int
   pageno_count : Int
   entries : Array[Entry]
+  eyebrow_n : String?
+  pageno_text : String?
 }
 
 ///|
 /// Parse every `<section class="slide">` into a `Slide`, tallying its outermost
-/// `.eyebrow`/`.pageno`/`.entry` descendants. Only `<section>` elements count as
+/// `.eyebrow`/`.pageno`/`.entry` descendants and capturing the text of the first
+/// `.eyebrow .n` and the first `.pageno`. Only `<section>` elements count as
 /// slides (a `<div class="slide">` is not a slide, but a real
 /// `<section class="slide">` nested inside one is still found — `want_tag`
 /// descends through the non-section wrapper). Replaces the M2.1a slide count:
@@ -707,15 +880,36 @@ fn scan_deck(doc : Array[Char]) -> Array[Slide] {
     let mut eyebrow_count = 0
     let mut pageno_count = 0
     let entries : Array[Entry] = []
+    let mut eyebrow_n : String? = None
+    let mut pageno_text : String? = None
     for part in find_by_class(doc, el.lo, el.hi, ["eyebrow", "pageno", "entry"]) {
       match part.token {
-        "eyebrow" => eyebrow_count = eyebrow_count + 1
-        "pageno" => pageno_count = pageno_count + 1
+        "eyebrow" => {
+          eyebrow_count = eyebrow_count + 1
+          if eyebrow_count == 1 {
+            let ns = find_by_class(doc, part.lo, part.hi, ["n"])
+            if ns.length() > 0 {
+              eyebrow_n = Some(inner_text(doc, ns[0].lo, ns[0].hi))
+            }
+          }
+        }
+        "pageno" => {
+          pageno_count = pageno_count + 1
+          if pageno_count == 1 {
+            pageno_text = Some(inner_text(doc, part.lo, part.hi))
+          }
+        }
         "entry" => entries.push(Entry::{  })
         _ => ()
       }
     }
-    slides.push(Slide::{ eyebrow_count, pageno_count, entries })
+    slides.push(Slide::{
+      eyebrow_count,
+      pageno_count,
+      entries,
+      eyebrow_n,
+      pageno_text,
+    })
   }
   slides
 }
@@ -792,20 +986,44 @@ fn check_frame(doc : Array[Char], out : Report) -> Unit {
 }
 
 ///|
-/// Per-slide structure checks: every slide must carry exactly one `.eyebrow`
-/// (`slide.eyebrow_count`) and exactly one `.pageno` (`slide.pageno_count`), and
-/// at least one `.entry` (`slide.no_entry`). Text and furigana checks are added
-/// in later M2.1 slices.
-fn check_slides(slides : Array[Slide], out : Report) -> Unit {
-  for s in slides {
+/// Per-slide structure and text checks. Structure: exactly one `.eyebrow`
+/// (`slide.eyebrow_count`), exactly one `.pageno` (`slide.pageno_count`), and at
+/// least one `.entry` (`slide.no_entry`). Text: the `.eyebrow .n` must read the
+/// two-digit 1-based slide number (`slide.eyebrow_n`), and the `.pageno` must
+/// read `"<slug> · <n> / <total>"` (`slide.pageno_format`). Entry and furigana
+/// checks are added in M2.1c.
+fn check_slides(slides : Array[Slide], slug : String, out : Report) -> Unit {
+  let total = slides.length()
+  for idx, s in slides {
+    let num = idx + 1
     if s.eyebrow_count != 1 {
       out.findings.push(
         must("slide.eyebrow_count", "slide must have exactly one .eyebrow"),
       )
     }
+    let want_n = two_digit(num)
+    let n_ok = match s.eyebrow_n {
+      Some(t) => t == want_n
+      None => false
+    }
+    if !n_ok {
+      out.findings.push(
+        must("slide.eyebrow_n", "slide .eyebrow .n must be \{want_n}"),
+      )
+    }
     if s.pageno_count != 1 {
       out.findings.push(
         must("slide.pageno_count", "slide must have exactly one .pageno"),
+      )
+    }
+    let want_pageno = "\{slug} \u{b7} \{num} / \{total}"
+    let pageno_ok = match s.pageno_text {
+      Some(t) => t == want_pageno
+      None => false
+    }
+    if !pageno_ok {
+      out.findings.push(
+        must("slide.pageno_format", "slide .pageno must be \{want_pageno}"),
       )
     }
     if s.entries.length() == 0 {
@@ -846,18 +1064,16 @@ fn check_imgs(
 // -- Public API --------------------------------------------------------------
 
 ///|
-/// Validate a deck's HTML against the envelope, slide-structure, and image
-/// contract, returning a structured `Report`. `slug` is the project name used by
-/// the per-slide text checks added in M2.1b-ii (unused here). `assets` holds the
-/// bundle's `assets/<name>` files. Comments and raw-text content are stripped
-/// once before any scan.
+/// Validate a deck's HTML against the envelope, slide-structure, slide-text, and
+/// image contract, returning a structured `Report`. `slug` is the project name
+/// the per-slide `.pageno` check expects. `assets` holds the bundle's
+/// `assets/<name>` files. Comments and raw-text content are stripped once before
+/// any scan.
 pub fn validate_deck(
   html : String,
   slug : String,
   assets : @set.Set[String],
 ) -> Report {
-  // Reserved for M2.1b's `.pageno` check; declared unused for now.
-  let _ = slug
   let doc = strip_raw_text(strip_comments(html.to_array()))
   let out = Report::{ findings: [] }
   check_frame(doc, out)
@@ -865,7 +1081,7 @@ pub fn validate_deck(
   if slides.length() == 0 {
     out.findings.push(must("frame.no_slides", "no <section class=\"slide\">"))
   }
-  check_slides(slides, out)
+  check_slides(slides, slug, out)
   check_imgs(doc, assets, out)
   out
 }

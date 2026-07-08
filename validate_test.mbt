@@ -183,9 +183,11 @@ test "image checks map to their codes" {
 }
 
 ///|
-/// Each seeded slide-structure defect surfaces exactly its code: a duplicate
-/// `.eyebrow` or `.pageno` breaks the "exactly one" count, and a slide with no
-/// `.entry` flags `slide.no_entry`.
+/// Each seeded slide-structure defect surfaces exactly its code. Every valid
+/// member carries correct text — the first `.eyebrow`/`.pageno` is well-formed —
+/// so only the structural defect surfaces, never a spurious text finding: a
+/// duplicate `.eyebrow`/`.pageno` breaks the "exactly one" count, and a slide
+/// with no `.entry` flags `slide.no_entry`.
 test "slide structure defects each map to their code" {
   let dup_eyebrow = envelope(
     sections=slide_of(
@@ -198,7 +200,11 @@ test "slide structure defects each map to their code" {
     "slide.eyebrow_count",
   ])
   let dup_pageno = envelope(
-    sections=slide_of(eyebrow("01"), entry(), pageno("a") + pageno("b")),
+    sections=slide_of(
+      eyebrow("01"),
+      entry(),
+      pageno("project \u{b7} 1 / 1") + pageno("b"),
+    ),
   )
   json_inspect(validate_deck(dup_pageno, "project", no_assets()).codes(), content=[
     "slide.pageno_count",
@@ -208,6 +214,47 @@ test "slide structure defects each map to their code" {
   )
   json_inspect(validate_deck(no_entry, "project", no_assets()).codes(), content=[
     "slide.no_entry",
+  ])
+}
+
+///|
+/// A two-slide deck with correct section numbers and page-number footers passes
+/// clean: each slide's `.eyebrow .n` is its two-digit 1-based index and its
+/// `.pageno` reads `"<slug> · <n> / <total>"`.
+test "well-formed multi-slide deck passes the text checks" {
+  let s1 = slide_of(eyebrow("01"), entry(), pageno("proj \u{b7} 1 / 2"))
+  let s2 = slide_of(eyebrow("02"), entry(), pageno("proj \u{b7} 2 / 2"))
+  json_inspect(
+    validate_deck(envelope(sections=s1 + s2), "proj", no_assets()).codes(),
+    content=[],
+  )
+}
+
+///|
+/// The `.pageno` text is compared after entity decoding, so a slug carrying a
+/// character escaped in the deck (`A&amp;B`) matches the raw slug `A&B`.
+test "pageno format compares decoded text" {
+  let deck = envelope(
+    sections=slide_of(eyebrow("01"), entry(), pageno("A&amp;B \u{b7} 1 / 1")),
+  )
+  json_inspect(validate_deck(deck, "A&B", no_assets()).codes(), content=[])
+}
+
+///|
+/// Each seeded slide-text defect surfaces exactly its code: a wrong `.eyebrow .n`
+/// flags `slide.eyebrow_n`, and a wrong `.pageno` flags `slide.pageno_format`.
+test "slide text defects each map to their code" {
+  let wrong_n = envelope(
+    sections=slide_of(eyebrow("99"), entry(), pageno("project \u{b7} 1 / 1")),
+  )
+  json_inspect(validate_deck(wrong_n, "project", no_assets()).codes(), content=[
+    "slide.eyebrow_n",
+  ])
+  let bad_pageno = envelope(
+    sections=slide_of(eyebrow("01"), entry(), pageno("wrong")),
+  )
+  json_inspect(validate_deck(bad_pageno, "project", no_assets()).codes(), content=[
+    "slide.pageno_format",
   ])
 }
 
@@ -271,11 +318,12 @@ async test "validate_deck_dir over a disk bundle" {
 }
 
 ///|
-/// The shipped `templates/deck.html` passes the envelope and image checks — the
-/// real hand-authored template is the positive contract. Located via the repo
-/// root so it runs under `moon test` regardless of cwd; skipped only if the root
-/// cannot be found.
-async test "shipped template envelope is clean" {
+/// The shipped `templates/deck.html` passes the full envelope, slide-structure,
+/// slide-text, and image checks with slug `project`: the hand-authored template
+/// (two slides, section numbers `01`/`02`, page footers `project · n / 2`) is the
+/// positive contract. Located via the repo root so it runs under `moon test`
+/// regardless of cwd; skipped only if the root cannot be found.
+async test "shipped template frame and slides are clean" {
   guard find_repo_root() is Some(root) else { return }
   let html = @fs.read_file("\{root}/templates/deck.html").text()
   let assets = list_assets("\{root}/templates")

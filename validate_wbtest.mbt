@@ -96,9 +96,10 @@ test "find_by_class reports siblings, not nested duplicates" {
 }
 
 ///|
-/// `scan_deck` parses a `<section class="slide">` into one `Slide`, tallying its
+/// `scan_deck` parses a `<section class="slide">` into one `Slide`: it tallies the
 /// outermost `.eyebrow`/`.pageno`/`.entry` descendants (the nested `.n` and `.jp`
-/// are inside skipped bodies, so they do not inflate the counts).
+/// are inside skipped bodies, so they do not inflate the counts) and captures the
+/// `.eyebrow .n` text and the `.pageno` text.
 test "scan_deck parses one builder slide" {
   let html = "<section class=\"slide\"><div class=\"eyebrow\"><span class=\"n\">01</span></div><div class=\"entry\"><div class=\"jp\">a</div></div><div class=\"pageno\">p</div></section>"
   let slides = scan_deck(html.to_array())
@@ -107,6 +108,32 @@ test "scan_deck parses one builder slide" {
     "\{slides[0].eyebrow_count}|\{slides[0].pageno_count}|\{slides[0].entries.length()}",
     content="1|1|1",
   )
+  inspect(
+    "\{slides[0].eyebrow_n.unwrap_or("<none>")}|\{slides[0].pageno_text.unwrap_or("<none>")}",
+    content="01|p",
+  )
+}
+
+///|
+/// `decode_entities` decodes named, decimal, and hexadecimal references, keeps an
+/// unknown name or a reference missing its `;` literal, and is total on a bare
+/// `&`.
+test "decode_entities named, numeric, and literal fallback" {
+  inspect(decode_entities("a&amp;b"), content="a&b")
+  inspect(decode_entities("&lt;tag&gt;"), content="<tag>")
+  inspect(decode_entities("x&#183;y"), content="x\u{b7}y")
+  inspect(decode_entities("x&#xB7;y"), content="x\u{b7}y")
+  inspect(decode_entities("&foo;"), content="&foo;")
+  inspect(decode_entities("Q&A"), content="Q&A")
+  inspect(decode_entities("&amp"), content="&amp")
+}
+
+///|
+/// `inner_text` drops tags (quote-aware), decodes character references, and trims
+/// surrounding ASCII whitespace, so an element body yields its plain text.
+test "inner_text drops tags, decodes, and trims" {
+  let doc = "  <span class=\"n\">01</span> A&amp;B \u{b7} 1 ".to_array()
+  inspect(inner_text(doc, 0, doc.length()), content="01 A&B \u{b7} 1")
 }
 
 ///|

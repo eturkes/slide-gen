@@ -129,6 +129,38 @@ test "decode_entities named, numeric, and literal fallback" {
 }
 
 ///|
+/// `decode_entities` is total and safe at the numeric boundaries: a surrogate
+/// (`&#xD800;`) and an over-max code point (`&#x110000;`) are rejected and kept
+/// literal (the `> 0x10FFFF` guard short-circuits before any accumulator
+/// overflow, then `Int::to_char` rejects surrogates); the maximum scalar
+/// `&#x10FFFF;` decodes (boundary inclusive, not off-by-one); long leading zeros
+/// build the same code without overflow; named references are case-sensitive; and
+/// a digitless numeric reference stays literal.
+test "decode_entities boundary and totality" {
+  inspect(decode_entities("&#xD800;"), content="&#xD800;")
+  inspect(decode_entities("&#x110000;"), content="&#x110000;")
+  assert_false(decode_entities("&#x10FFFF;") == "&#x10FFFF;")
+  inspect(decode_entities("&#00000000000000183;"), content="\u{b7}")
+  inspect(decode_entities("&AMP;"), content="&AMP;")
+  inspect(decode_entities("&#;"), content="&#;")
+  inspect(decode_entities("&#x;"), content="&#x;")
+}
+
+///|
+/// Totality property: a `&` that does not begin a well-formed reference is kept
+/// verbatim, so decoding a fragment with no valid reference is the identity and
+/// never traps — including a decimal run long enough to overflow `Int` were the
+/// `> 0x10FFFF` guard absent.
+test "decode_entities leaves malformed references verbatim" {
+  let malformed = [
+    "&", "&#", "&#x", "&;", "&#;", "&#x;", "&xyz", "&#xG;", "a&&b", "&#z;", "&#99999999999999999999;",
+  ]
+  for m in malformed {
+    assert_eq(decode_entities(m), m)
+  }
+}
+
+///|
 /// `inner_text` drops tags (quote-aware), decodes character references, and trims
 /// surrounding ASCII whitespace, so an element body yields its plain text.
 test "inner_text drops tags, decodes, and trims" {

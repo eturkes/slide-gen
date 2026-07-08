@@ -259,6 +259,39 @@ test "slide text defects each map to their code" {
 }
 
 ///|
+/// A single `.eyebrow` holding two `.n` spans is a defect even when the first
+/// reads the right number: `scan_deck` captures the `.n` only when it is unique,
+/// so `slide.eyebrow_n` fires. Closes the first-only false negative where a
+/// stray second `.n` (here `99`) rode along unchecked.
+test "duplicate .n inside one eyebrow flags slide.eyebrow_n" {
+  let two_n = "<div class=\"eyebrow\"><span class=\"n\">01</span><span class=\"n\">99</span></div>"
+  let deck = envelope(
+    sections=slide_of(two_n, entry(), pageno("project \u{b7} 1 / 1")),
+  )
+  json_inspect(validate_deck(deck, "project", no_assets()).codes(), content=[
+    "slide.eyebrow_n",
+  ])
+}
+
+///|
+/// The text checks are gated on their owning count being 1, so one absent slot
+/// yields one finding, not two: a slide missing its `.eyebrow` reports only
+/// `slide.eyebrow_count` (never also `slide.eyebrow_n`), and a slide missing its
+/// `.pageno` reports only `slide.pageno_count` (never also `slide.pageno_format`).
+test "a missing slot reports only its count, not the text code" {
+  let no_eyebrow = envelope(
+    sections=slide_of("", entry(), pageno("project \u{b7} 1 / 1")),
+  )
+  json_inspect(validate_deck(no_eyebrow, "project", no_assets()).codes(), content=[
+    "slide.eyebrow_count",
+  ])
+  let no_pageno = envelope(sections=slide_of(eyebrow("01"), entry(), ""))
+  json_inspect(validate_deck(no_pageno, "project", no_assets()).codes(), content=[
+    "slide.pageno_count",
+  ])
+}
+
+///|
 /// Frame checks are fail-closed against attribute-embedded tag literals: a
 /// `<style></style>` sitting inside a quoted attribute value, with no real
 /// `<style>` element, must NOT satisfy `frame.style`. The quote-aware

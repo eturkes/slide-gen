@@ -710,7 +710,8 @@ fn trim_ws(s : String) -> String {
 ///|
 /// The character an HTML named reference denotes, for the small set the deck
 /// uses (`&amp; &lt; &gt; &quot; &apos; &nbsp; &middot;`), or `None` for any
-/// other name. Names are case-sensitive, matching HTML5's canonical forms.
+/// other name. Only these lowercase, semicolon-terminated forms are recognized —
+/// a deliberate subset of HTML5's named references, not the full table.
 fn named_entity(name : String) -> Char? {
   match name {
     "amp" => Some('&')
@@ -855,7 +856,8 @@ priv struct Entry {}
 ///|
 /// A parsed `<section class="slide">`: the counts of its `.eyebrow` and `.pageno`
 /// children, its list of `.entry` elements, and the text of its first
-/// `.eyebrow .n` and `.pageno` (`None` when absent). Counts drive the
+/// `.eyebrow`'s unique `.n` and its first `.pageno` (`None` when absent, or — for
+/// `eyebrow_n` — when that eyebrow's `.n` is not unique). Counts drive the
 /// "exactly one" checks, the entry list drives "at least one entry", and the
 /// captured texts drive the slide-number and page-number format checks.
 priv struct Slide {
@@ -869,7 +871,8 @@ priv struct Slide {
 ///|
 /// Parse every `<section class="slide">` into a `Slide`, tallying its outermost
 /// `.eyebrow`/`.pageno`/`.entry` descendants and capturing the text of the first
-/// `.eyebrow .n` and the first `.pageno`. Only `<section>` elements count as
+/// `.eyebrow`'s `.n` (only when it holds exactly one) and the first `.pageno`.
+/// Only `<section>` elements count as
 /// slides (a `<div class="slide">` is not a slide, but a real
 /// `<section class="slide">` nested inside one is still found — `want_tag`
 /// descends through the non-section wrapper). Replaces the M2.1a slide count:
@@ -888,7 +891,7 @@ fn scan_deck(doc : Array[Char]) -> Array[Slide] {
           eyebrow_count = eyebrow_count + 1
           if eyebrow_count == 1 {
             let ns = find_by_class(doc, part.lo, part.hi, ["n"])
-            if ns.length() > 0 {
+            if ns.length() == 1 {
               eyebrow_n = Some(inner_text(doc, ns[0].lo, ns[0].hi))
             }
           }
@@ -988,10 +991,12 @@ fn check_frame(doc : Array[Char], out : Report) -> Unit {
 ///|
 /// Per-slide structure and text checks. Structure: exactly one `.eyebrow`
 /// (`slide.eyebrow_count`), exactly one `.pageno` (`slide.pageno_count`), and at
-/// least one `.entry` (`slide.no_entry`). Text: the `.eyebrow .n` must read the
-/// two-digit 1-based slide number (`slide.eyebrow_n`), and the `.pageno` must
-/// read `"<slug> · <n> / <total>"` (`slide.pageno_format`). Entry and furigana
-/// checks are added in M2.1c.
+/// least one `.entry` (`slide.no_entry`) — counted over each slide's OUTERMOST
+/// layout slots. Text (gated on its owning count being 1, so a missing or
+/// duplicated slot reports only the count code): the sole `.eyebrow`'s single
+/// `.n` must read the two-digit 1-based slide number (`slide.eyebrow_n`), and
+/// the sole `.pageno` must read `"<slug> · <n> / <total>"`
+/// (`slide.pageno_format`). Entry and furigana checks are added in M2.1c.
 fn check_slides(slides : Array[Slide], slug : String, out : Report) -> Unit {
   let total = slides.length()
   for idx, s in slides {
@@ -1000,31 +1005,33 @@ fn check_slides(slides : Array[Slide], slug : String, out : Report) -> Unit {
       out.findings.push(
         must("slide.eyebrow_count", "slide must have exactly one .eyebrow"),
       )
-    }
-    let want_n = two_digit(num)
-    let n_ok = match s.eyebrow_n {
-      Some(t) => t == want_n
-      None => false
-    }
-    if !n_ok {
-      out.findings.push(
-        must("slide.eyebrow_n", "slide .eyebrow .n must be \{want_n}"),
-      )
+    } else {
+      let want_n = two_digit(num)
+      let n_ok = match s.eyebrow_n {
+        Some(t) => t == want_n
+        None => false
+      }
+      if !n_ok {
+        out.findings.push(
+          must("slide.eyebrow_n", "slide .eyebrow .n must be \{want_n}"),
+        )
+      }
     }
     if s.pageno_count != 1 {
       out.findings.push(
         must("slide.pageno_count", "slide must have exactly one .pageno"),
       )
-    }
-    let want_pageno = "\{slug} \u{b7} \{num} / \{total}"
-    let pageno_ok = match s.pageno_text {
-      Some(t) => t == want_pageno
-      None => false
-    }
-    if !pageno_ok {
-      out.findings.push(
-        must("slide.pageno_format", "slide .pageno must be \{want_pageno}"),
-      )
+    } else {
+      let want_pageno = "\{slug} \u{b7} \{num} / \{total}"
+      let pageno_ok = match s.pageno_text {
+        Some(t) => t == want_pageno
+        None => false
+      }
+      if !pageno_ok {
+        out.findings.push(
+          must("slide.pageno_format", "slide .pageno must be \{want_pageno}"),
+        )
+      }
     }
     if s.entries.length() == 0 {
       out.findings.push(

@@ -1,10 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 ///|
-/// One three-tier `.entry` (JA / furigana / EN). Structurally complete for the
-/// slide-count checks; its text content is exercised by later M2.1 slices.
+/// One three-tier `.entry` (JA / furigana / EN). Structurally complete; its `.jp`
+/// and `.jpf` match and it carries no kanji, so it passes the M2.1c entry checks.
 fn entry() -> String {
   "<div class=\"entry\"><div class=\"jp\">a</div><div class=\"jpf\">a</div><div class=\"en\">A</div></div>"
+}
+
+///|
+/// A three-tier `.entry` from explicit `.jp`, `.jpf`, and `.en` inner HTML, for
+/// exercising the M2.1c entry and furigana checks.
+fn entry_of(jp : String, jpf : String, en : String) -> String {
+  "<div class=\"entry\"><div class=\"jp\">\{jp}</div><div class=\"jpf\">\{jpf}</div><div class=\"en\">\{en}</div></div>"
+}
+
+///|
+/// A one-slide deck whose single `.entry` is `e`, for exercising entry checks in
+/// isolation (slug `project`, section `01`, footer `project · 1 / 1`).
+fn deck_with_entry(e : String) -> String {
+  envelope(sections=slide_of(eyebrow("01"), e, pageno("project \u{b7} 1 / 1")))
 }
 
 ///|
@@ -292,6 +306,63 @@ test "a missing slot reports only its count, not the text code" {
 }
 
 ///|
+/// A well-formed furigana entry passes: `.jp` and `.jpf` share the same base
+/// text, every `.jpf` kanji is covered per character (a `要点` run split across
+/// two adjacent single-kanji ruby groups still passes), each `<ruby>` has one
+/// all-kana `<rt>`, a kanji inside a `<code>` span is exempt from coverage, and
+/// no ruby lives outside `.jpf`.
+test "well-formed furigana entry passes" {
+  let jpf = "<ruby>要<rt>よう</rt></ruby><ruby>点<rt>てん</rt></ruby>は<code>図</code>"
+  let good = entry_of("要点は<code>図</code>", jpf, "A")
+  json_inspect(
+    validate_deck(deck_with_entry(good), "project", no_assets()).codes(),
+    content=[],
+  )
+}
+
+///|
+/// Each seeded entry or furigana defect surfaces exactly its code: tiers out of
+/// order (`entry.tiers`, which gates the rest); `.jp`/`.jpf` base text that
+/// disagrees (`entry.ja_pairing`); an `<rt>` reading carrying a kanji
+/// (`ruby.rt_not_kana`); a `<ruby>` with two `<rt>` (`ruby.rt_count`); a bare
+/// kanji in `.jpf` with no covering ruby (`ruby.kanji_uncovered`); and a
+/// `<ruby>` in the `.jp` tier, outside `.jpf` (`ruby.rt_outside_jpf`).
+test "entry and furigana defects each map to their code" {
+  let bad_tiers = "<div class=\"entry\"><div class=\"jpf\">a</div><div class=\"jp\">a</div><div class=\"en\">A</div></div>"
+  json_inspect(
+    validate_deck(deck_with_entry(bad_tiers), "project", no_assets()).codes(),
+    content=["entry.tiers"],
+  )
+  let unpaired = entry_of("要", "<ruby>点<rt>てん</rt></ruby>", "A")
+  json_inspect(
+    validate_deck(deck_with_entry(unpaired), "project", no_assets()).codes(),
+    content=["entry.ja_pairing"],
+  )
+  let rt_kanji = entry_of("要", "<ruby>要<rt>ヨ点</rt></ruby>", "A")
+  json_inspect(
+    validate_deck(deck_with_entry(rt_kanji), "project", no_assets()).codes(),
+    content=["ruby.rt_not_kana"],
+  )
+  let two_rt = entry_of("要", "<ruby>要<rt>よ</rt><rt>う</rt></ruby>", "A")
+  json_inspect(
+    validate_deck(deck_with_entry(two_rt), "project", no_assets()).codes(),
+    content=["ruby.rt_count"],
+  )
+  let uncovered = entry_of("図", "図", "A")
+  json_inspect(
+    validate_deck(deck_with_entry(uncovered), "project", no_assets()).codes(),
+    content=["ruby.kanji_uncovered"],
+  )
+  let outside = entry_of(
+    "<ruby>要<rt>よう</rt></ruby>", "<ruby>要<rt>よう</rt></ruby>", "A",
+  )
+  json_inspect(
+    validate_deck(deck_with_entry(outside), "project", no_assets()).codes(),
+    content=["ruby.rt_outside_jpf"],
+  )
+}
+
+///|
 /// Frame checks are fail-closed against attribute-embedded tag literals: a
 /// `<style></style>` sitting inside a quoted attribute value, with no real
 /// `<style>` element, must NOT satisfy `frame.style`. The quote-aware
@@ -352,10 +423,11 @@ async test "validate_deck_dir over a disk bundle" {
 
 ///|
 /// The shipped `templates/deck.html` passes the full envelope, slide-structure,
-/// slide-text, and image checks with slug `project`: the hand-authored template
-/// (two slides, section numbers `01`/`02`, page footers `project · n / 2`) is the
-/// positive contract. Located via the repo root so it runs under `moon test`
-/// regardless of cwd; skipped only if the root cannot be found.
+/// slide-text, entry/furigana, and image checks with slug `project`: the
+/// hand-authored template (two slides, section numbers `01`/`02`, page footers
+/// `project · n / 2`, and real three-tier ruby entries) is the positive contract.
+/// Located via the repo root so it runs under `moon test` regardless of cwd;
+/// skipped only if the root cannot be found.
 async test "shipped template frame and slides are clean" {
   guard find_repo_root() is Some(root) else { return }
   let html = @fs.read_file("\{root}/templates/deck.html").text()

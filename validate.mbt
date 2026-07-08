@@ -598,6 +598,26 @@ fn match_close(
   (end, end)
 }
 
+///|
+/// Classify the tag beginning at `<` index `i` within `doc[:end]`, returning
+/// `(name, is_close, past_gt)`: the ASCII-lowercase tag name, whether it is a
+/// closing tag (`</name>`), and the index just past the tag's `>` (quote-aware).
+/// The name is empty for a nameless tag. Used by the furigana scans, which must
+/// react to both the open and close of `<ruby>`/`<rt>`/`<code>`.
+fn classify_tag(doc : Array[Char], i : Int, end : Int) -> (String, Bool, Int) {
+  let is_close = i + 1 < end && doc[i + 1] == '/'
+  let name_start = if is_close { i + 2 } else { i + 1 }
+  let mut j = name_start
+  while j < end && is_ascii_letter(doc[j]) {
+    j = j + 1
+  }
+  let sb = StringBuilder::new()
+  for k in name_start..<j {
+    sb.write_char(lower_ascii(doc[k]))
+  }
+  (sb.to_string(), is_close, skip_tag(doc, i, end))
+}
+
 // -- Element discovery -------------------------------------------------------
 
 ///|
@@ -849,9 +869,21 @@ fn inner_text(doc : Array[Char], lo : Int, hi : Int) -> String {
 // -- Slide model -------------------------------------------------------------
 
 ///|
-/// One `.entry` within a slide. An empty marker in M2.1b; M2.1c fills it with the
-/// three-tier text and furigana it carries.
-priv struct Entry {}
+/// One tier of an `.entry`: its class (`jp`, `jpf`, or `en`) and the raw inner
+/// HTML between the tier element's open and close tags.
+priv struct Tier {
+  cls : String
+  html : String
+}
+
+///|
+/// One `.entry` within a slide: its raw inner HTML (`raw`, scanned by the
+/// ruby-outside-`.jpf` check) and its tier elements in document order (`tiers`,
+/// read by the tier-order, JA-pairing, and furigana checks).
+priv struct Entry {
+  raw : String
+  tiers : Array[Tier]
+}
 
 ///|
 /// A parsed `<section class="slide">`: the counts of its `.eyebrow` and `.pageno`
@@ -902,7 +934,19 @@ fn scan_deck(doc : Array[Char]) -> Array[Slide] {
             pageno_text = Some(inner_text(doc, part.lo, part.hi))
           }
         }
-        "entry" => entries.push(Entry::{  })
+        "entry" => {
+          let tiers : Array[Tier] = []
+          for t in find_by_class(doc, part.lo, part.hi, ["jp", "jpf", "en"]) {
+            tiers.push(Tier::{
+              cls: t.token,
+              html: range_to_string(doc, t.lo, t.hi),
+            })
+          }
+          entries.push(Entry::{
+            raw: range_to_string(doc, part.lo, part.hi),
+            tiers,
+          })
+        }
         _ => ()
       }
     }
@@ -996,7 +1040,8 @@ fn check_frame(doc : Array[Char], out : Report) -> Unit {
 /// duplicated slot reports only the count code): the sole `.eyebrow`'s single
 /// `.n` must read the two-digit 1-based slide number (`slide.eyebrow_n`), and
 /// the sole `.pageno` must read `"<slug> · <n> / <total>"`
-/// (`slide.pageno_format`). Entry and furigana checks are added in M2.1c.
+/// (`slide.pageno_format`). Each `.entry` is then checked by `check_entry`
+/// (tier order, JA pairing, and furigana).
 fn check_slides(slides : Array[Slide], slug : String, out : Report) -> Unit {
   let total = slides.length()
   for idx, s in slides {
@@ -1038,6 +1083,216 @@ fn check_slides(slides : Array[Slide], slug : String, out : Report) -> Unit {
         must("slide.no_entry", "slide must have at least one .entry"),
       )
     }
+    for e in s.entries {
+      check_entry(e, out)
+    }
+  }
+}
+
+///|
+/// Whether `c` is a CJK ideograph (kanji): the main block plus Extension A, the
+/// compatibility ideographs, and Extension B and beyond. Kanji in a `.jpf` tier
+/// must carry furigana; kana, punctuation, Latin, and digits do not.
+fn is_kanji(c : Char) -> Bool {
+  let o = c.to_int()
+  (o >= 0x3400 && o <= 0x4DBF) ||
+  (o >= 0x4E00 && o <= 0x9FFF) ||
+  (o >= 0xF900 && o <= 0xFAFF) ||
+  (o >= 0x20000 && o <= 0x2FA1F)
+}
+
+///|
+/// Whether `c` is Japanese kana: hiragana (U+3040–309F) or katakana
+/// (U+30A0–30FF, which includes the long-vowel mark ー). A furigana `<rt>`
+/// reading must be all kana.
+fn is_kana(c : Char) -> Bool {
+  let o = c.to_int()
+  (o >= 0x3040 && o <= 0x309F) || (o >= 0x30A0 && o <= 0x30FF)
+}
+
+///|
+/// Whether every non-whitespace character of `s` is kana. An `<rt>` reading is
+/// required to be all kana; interior whitespace is ignored and an empty reading
+/// is vacuously all-kana.
+fn all_kana(s : String) -> Bool {
+  for c in s.to_array() {
+    if !is_space(c) && !is_kana(c) {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Collapse each run of ASCII/HTML whitespace in `s` to a single space and trim
+/// the ends, so two JA tiers compare equal up to insignificant layout whitespace.
+fn collapse_ws(s : String) -> String {
+  let cs = s.to_array()
+  let sb = StringBuilder::new()
+  let mut pending = false
+  let mut started = false
+  for i in 0..<cs.length() {
+    if is_space(cs[i]) {
+      pending = true
+    } else {
+      if pending && started {
+        sb.write_char(' ')
+      }
+      sb.write_char(cs[i])
+      started = true
+      pending = false
+    }
+  }
+  sb.to_string()
+}
+
+///|
+/// Normalize a JA tier's inner HTML to comparable plain text: strip tags but keep
+/// their text nodes, DROP each `<rt>` reading (so a furigana tier reduces to its
+/// base text), decode character references, and collapse/trim whitespace. A
+/// well-formed entry's `.jp` and `.jpf` normalize equal; a kanji dropped or
+/// substituted between the tiers makes them differ.
+fn normalize_ja(html : String) -> String {
+  let cs = html.to_array()
+  let n = cs.length()
+  let sb = StringBuilder::new()
+  let mut i = 0
+  while i < n {
+    if cs[i] == '<' {
+      let (name, is_close, past_gt) = classify_tag(cs, i, n)
+      if name == "rt" && !is_close {
+        let (_, close_past) = match_close(cs, "rt", past_gt, n)
+        i = close_past
+      } else {
+        i = past_gt
+      }
+    } else {
+      sb.write_char(cs[i])
+      i = i + 1
+    }
+  }
+  collapse_ws(decode_entities(sb.to_string()))
+}
+
+///|
+/// Furigana checks within a `.jpf` tier's inner HTML, in one pass over the
+/// characters while tracking whether the scan is inside a `<ruby>`, an `<rt>`, or
+/// a `<code>` span:
+///  - `ruby.rt_count`: every `<ruby>` must be closed and hold exactly one `<rt>`.
+///  - `ruby.rt_not_kana`: every `<rt>` reading must be all kana.
+///  - `ruby.kanji_uncovered`: every kanji outside a `<code>` span must sit in a
+///    ruby base (inside `<ruby>` but outside its `<rt>`), so a bare kanji lacking
+///    furigana flags. Coverage is per kanji CHARACTER, not per run, so a kanji
+///    run split across adjacent ruby groups (要点 as 要 + 点) still passes.
+/// Each code is reported at most once.
+fn check_jpf_ruby(html : String, out : Report) -> Unit {
+  let cs = html.to_array()
+  let n = cs.length()
+  let mut in_ruby = false
+  let mut in_code = false
+  let mut in_rt = false
+  let mut rt_in_ruby = 0
+  let mut rt_start = 0
+  let mut bad_rt_count = false
+  let mut bad_rt_kana = false
+  let mut uncovered = false
+  let mut i = 0
+  while i < n {
+    if cs[i] == '<' {
+      let (name, is_close, past_gt) = classify_tag(cs, i, n)
+      match (name, is_close) {
+        ("ruby", false) => {
+          in_ruby = true
+          rt_in_ruby = 0
+        }
+        ("ruby", true) => {
+          if rt_in_ruby != 1 {
+            bad_rt_count = true
+          }
+          in_ruby = false
+          in_rt = false
+        }
+        ("rt", false) => {
+          in_rt = true
+          rt_in_ruby = rt_in_ruby + 1
+          rt_start = past_gt
+        }
+        ("rt", true) => {
+          in_rt = false
+          if !all_kana(decode_entities(range_to_string(cs, rt_start, i))) {
+            bad_rt_kana = true
+          }
+        }
+        ("code", false) => in_code = true
+        ("code", true) => in_code = false
+        _ => ()
+      }
+      i = past_gt
+    } else {
+      if !in_rt && is_kanji(cs[i]) && !in_ruby && !in_code {
+        uncovered = true
+      }
+      i = i + 1
+    }
+  }
+  if in_ruby {
+    bad_rt_count = true // unclosed <ruby> never reached its close-tag check
+  }
+  if bad_rt_count {
+    out.findings.push(
+      must(
+        "ruby.rt_count", "every <ruby> must be closed and hold exactly one <rt>",
+      ),
+    )
+  }
+  if bad_rt_kana {
+    out.findings.push(must("ruby.rt_not_kana", "<rt> reading must be all kana"))
+  }
+  if uncovered {
+    out.findings.push(
+      must("ruby.kanji_uncovered", "kanji in .jpf must sit inside a ruby base"),
+    )
+  }
+}
+
+///|
+/// Entry- and furigana-level checks for one `.entry`. Its tiers must be exactly
+/// `.jp`, `.jpf`, `.en` in DOM order (`entry.tiers`); when they are not, only
+/// that code is reported (one root cause, one finding, gating the rest — as the
+/// slide count/text checks do). When well-formed: the JA tiers must pair, their
+/// normalized base text equal (`entry.ja_pairing`); the `.jpf` ruby must be
+/// well-formed (`check_jpf_ruby`); and no `<ruby>`/`<rt>` may live outside the
+/// `.jpf` tier (`ruby.rt_outside_jpf`, counted across the whole entry against its
+/// `.jpf`).
+fn check_entry(e : Entry, out : Report) -> Unit {
+  let tiers_ok = e.tiers.length() == 3 &&
+    e.tiers[0].cls == "jp" &&
+    e.tiers[1].cls == "jpf" &&
+    e.tiers[2].cls == "en"
+  if !tiers_ok {
+    out.findings.push(
+      must("entry.tiers", "entry must have .jp, .jpf, .en in order"),
+    )
+    return
+  }
+  let jp = e.tiers[0].html
+  let jpf = e.tiers[1].html
+  if normalize_ja(jp) != normalize_ja(jpf) {
+    out.findings.push(
+      must("entry.ja_pairing", ".jp and .jpf must carry the same JA text"),
+    )
+  }
+  check_jpf_ruby(jpf, out)
+  let raw = e.raw.to_array()
+  let jpf_arr = jpf.to_array()
+  let outside = find_all_open_tags(raw, "ruby").length() +
+    find_all_open_tags(raw, "rt").length() -
+    find_all_open_tags(jpf_arr, "ruby").length() -
+    find_all_open_tags(jpf_arr, "rt").length()
+  if outside > 0 {
+    out.findings.push(
+      must("ruby.rt_outside_jpf", "<ruby>/<rt> may appear only in .jpf"),
+    )
   }
 }
 
@@ -1071,9 +1326,10 @@ fn check_imgs(
 // -- Public API --------------------------------------------------------------
 
 ///|
-/// Validate a deck's HTML against the envelope, slide-structure, slide-text, and
-/// image contract, returning a structured `Report`. `slug` is the project name
-/// the per-slide `.pageno` check expects. `assets` holds the bundle's
+/// Validate a deck's HTML against the envelope, slide-structure, slide-text,
+/// entry/furigana, and image contract, returning a structured `Report`. `slug`
+/// is the project name the per-slide `.pageno` check expects. `assets` holds the
+/// bundle's
 /// `assets/<name>` files. Comments and raw-text content are stripped once before
 /// any scan.
 pub fn validate_deck(

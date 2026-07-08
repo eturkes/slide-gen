@@ -196,3 +196,72 @@ test "match_close: void element and unbalanced input" {
   let (c, d) = match_close(div, "div", 5, div.length())
   inspect("\{c}|\{d}", content="8|8")
 }
+
+///|
+/// `normalize_ja` reduces a JA tier to comparable base text: it strips tags but
+/// keeps their text nodes, drops each `<rt>` reading, decodes character
+/// references, and collapses/trims whitespace. So a `.jpf` furigana tier
+/// normalizes to the same string as its bare-kanji `.jp` counterpart.
+test "normalize_ja drops rt, strips tags, decodes, and collapses" {
+  inspect(
+    normalize_ja("<ruby>要<rt>よう</rt></ruby>点<code>x</code>"),
+    content="要点x",
+  )
+  inspect(normalize_ja("  a &amp;  b  "), content="a & b")
+}
+
+///|
+/// `is_kanji` and `is_kana` classify by Unicode range: a CJK ideograph is kanji
+/// but not kana, a hiragana or katakana character is kana but not kanji, and a
+/// Latin letter is neither.
+test "is_kanji and is_kana ranges" {
+  assert_true(is_kanji('要'))
+  assert_false(is_kanji('よ'))
+  assert_false(is_kanji('a'))
+  assert_true(is_kana('よ'))
+  assert_true(is_kana('ヨ'))
+  assert_false(is_kana('要'))
+  assert_false(is_kana('a'))
+}
+
+///|
+/// `check_jpf_ruby` covers kanji per character (a `要点` run split across two
+/// adjacent single-kanji ruby groups is fully covered), exempts a kanji inside a
+/// `<code>` span, and flags a bare kanji sitting outside any ruby or code as
+/// `ruby.kanji_uncovered`.
+test "check_jpf_ruby per-kanji coverage and code exemption" {
+  let split = Report::{ findings: [] }
+  check_jpf_ruby(
+    "<ruby>要<rt>よう</rt></ruby><ruby>点<rt>てん</rt></ruby>", split,
+  )
+  json_inspect(split.codes(), content=[])
+  let coded = Report::{ findings: [] }
+  check_jpf_ruby("<code>図</code>", coded)
+  json_inspect(coded.codes(), content=[])
+  let bare = Report::{ findings: [] }
+  check_jpf_ruby("要点", bare)
+  json_inspect(bare.codes(), content=["ruby.kanji_uncovered"])
+}
+
+///|
+/// An unclosed `<ruby>` never reaches its close-tag `rt_count` check mid-scan, so
+/// the end-of-scan guard must still flag it (`ruby.rt_count`); its lone open kanji
+/// counts as covered (inside the open ruby base), proving the guard is what fires.
+test "check_jpf_ruby flags an unclosed ruby" {
+  let unclosed = Report::{ findings: [] }
+  check_jpf_ruby("<ruby>要<rt>よう</rt>", unclosed)
+  json_inspect(unclosed.codes(), content=["ruby.rt_count"])
+}
+
+///|
+/// `scan_deck` fills each `.entry` with its tier elements in document order and
+/// captures the raw inner HTML of each tier, so the entry checks see `.jp`,
+/// `.jpf`, `.en` and the furigana markup inside `.jpf`.
+test "scan_deck fills entry tiers" {
+  let html = "<section class=\"slide\"><div class=\"eyebrow\"><span class=\"n\">01</span></div><div class=\"entry\"><div class=\"jp\">要</div><div class=\"jpf\"><ruby>要<rt>よう</rt></ruby></div><div class=\"en\">A</div></div><div class=\"pageno\">p</div></section>"
+  let slides = scan_deck(html.to_array())
+  assert_eq(slides.length(), 1)
+  let e = slides[0].entries[0]
+  json_inspect(e.tiers.map(fn(t) { t.cls }), content=["jp", "jpf", "en"])
+  inspect(e.tiers[1].html, content="<ruby>要<rt>よう</rt></ruby>")
+}

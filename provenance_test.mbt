@@ -289,5 +289,52 @@ async test "validate_bundle_dir deck cross-reference" {
       Some("no gaps\n"),
     )
     json_inspect(validate_bundle_dir(tagged, "project", root).codes(), content=[])
+    // A data-claim hidden inside an HTML comment is stripped before the
+    // cross-ref runs, so it does not dangle. The inner `<a>` is load-bearing:
+    // without real comment-stripping the tag walk's crude `<!` skip stops at the
+    // `<a>`'s `>` and would then read `ghost` as a live claim, so a clean result
+    // proves `validate_bundle_dir` cleans the deck first.
+    let commented = make_bundle(
+      root,
+      "commented",
+      Some(
+        deck_with_entry(
+          entry_of(
+            "a", "a", "<span data-claim=\"c1\">x</span><!-- <a> <span data-claim=\"ghost\"> -->",
+          ),
+        ),
+      ),
+      Some(prov_gap_rows(["c1"])),
+      Some("no gaps\n"),
+    )
+    json_inspect(validate_bundle_dir(commented, "project", root).codes(), content=[])
+    // A data-claim naming a schema-invalid row: the row is excluded from the id
+    // set, so the claim both fails schema and dangles.
+    let invalid = make_bundle(
+      root,
+      "invalid",
+      Some(
+        deck_with_entry(entry_of("a", "a", "<span data-claim=\"c1\">x</span>")),
+      ),
+      Some("[{\"id\":\"c1\",\"slide\":1,\"claim\":\"x\",\"status\":\"maybe\"}]"),
+      Some("no gaps\n"),
+    )
+    json_inspect(validate_bundle_dir(invalid, "project", root).codes(), content=[
+      "prov.schema", "prov.dangling_claim",
+    ])
+    // An unparseable provenance.json yields an empty id set, so every deck
+    // data-claim cascades to dangling on top of the parse finding.
+    let parsefail = make_bundle(
+      root,
+      "parsefail",
+      Some(
+        deck_with_entry(entry_of("a", "a", "<span data-claim=\"c1\">x</span>")),
+      ),
+      Some("{"),
+      Some("no gaps\n"),
+    )
+    json_inspect(validate_bundle_dir(parsefail, "project", root).codes(), content=[
+      "prov.parse", "prov.dangling_claim",
+    ])
   }
 }

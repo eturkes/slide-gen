@@ -382,26 +382,30 @@ fn check_gaps(text : String, out : Report) -> Unit {
 }
 
 ///|
-/// Collect every `data-claim` attribute value carried by an open tag in
-/// `doc[start:end]`, in document order and at any depth. Runs on the cleaned deck
-/// (comments and raw-text content already blanked) and walks tag by tag via
-/// `scan_open_tag`/`skip_tag`, so a `data-claim`-shaped run inside an attribute
-/// value or a comment is never mistaken for a real attribute.
-fn find_data_claims(doc : Array[Char], start : Int, end : Int) -> Array[String] {
+/// Collect every `data-claim` attribute value carried by an open tag in `doc`,
+/// in document order and at any depth. An open tag is recognized only when a
+/// letter follows `<` (mirroring `find_all_open_tags`), so a literal `<` in text
+/// (`5 < 6`) is not read as a tag and a `data-claim`-shaped run in prose after it
+/// is not collected; `get_attr` skips a `data-claim`-shaped run inside another
+/// attribute's quoted value. Close tags and `<!...>` are stepped over via
+/// `skip_tag`. Runs on the cleaned deck (comments and raw-text content blanked
+/// upstream), so no `<` inside CSS/JS reaches this scan.
+fn find_data_claims(doc : Array[Char]) -> Array[String] {
   let out : Array[String] = []
-  let mut i = start
-  while i < end {
-    if doc[i] == '<' {
-      if i + 1 < end && (doc[i + 1] == '/' || doc[i + 1] == '!') {
-        i = skip_tag(doc, i, end)
-      } else {
-        let (_, lo, hi, past_gt) = scan_open_tag(doc, i)
-        match get_attr(doc, lo, hi, "data-claim") {
-          Some(id) => out.push(id)
-          None => ()
-        }
-        i = past_gt
+  let n = doc.length()
+  let mut i = 0
+  while i < n {
+    if doc[i] == '<' && i + 1 < n && is_ascii_letter(doc[i + 1]) {
+      let (_, lo, hi, past_gt) = scan_open_tag(doc, i)
+      match get_attr(doc, lo, hi, "data-claim") {
+        Some(id) => out.push(id)
+        None => ()
       }
+      i = past_gt
+    } else if doc[i] == '<' &&
+      i + 1 < n &&
+      (doc[i + 1] == '/' || doc[i + 1] == '!') {
+      i = skip_tag(doc, i, n)
     } else {
       i = i + 1
     }
@@ -419,12 +423,12 @@ fn check_deck_crossref(
   row_ids : @set.Set[String],
   out : Report,
 ) -> Unit {
-  for id in find_data_claims(doc, 0, doc.length()) {
+  for id in find_data_claims(doc) {
     if !row_ids.contains(id) {
       out.findings.push(
         must(
           "prov.dangling_claim",
-          "deck data-claim \{id} names no provenance row",
+          "deck data-claim \{id} names no schema-valid provenance row",
         ),
       )
     }

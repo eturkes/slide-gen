@@ -173,5 +173,16 @@ test "resolve_src and is_inside anchor paths" {
 /// walks tag by tag so close tags are skipped.
 test "find_data_claims collects at every depth" {
   let doc = "<div data-claim=\"a\"><span data-claim=\"b\">1</span></div><img data-claim=\"c\">".to_array()
-  json_inspect(find_data_claims(doc, 0, doc.length()), content=["a", "b", "c"])
+  json_inspect(find_data_claims(doc), content=["a", "b", "c"])
+}
+
+///|
+/// `find_data_claims` rejects three decoys: a `data-claim`-shaped run inside
+/// another attribute's quoted value is not an attribute (so `decoy` is skipped);
+/// a literal `<` in text does not open a tag, so the real tagged claim following
+/// it is still collected rather than swallowed to the next `>`; and a close tag
+/// carries nothing. Only the two genuine open-tag attributes come back.
+test "find_data_claims skips decoys and treats a text `<` as text" {
+  let doc = "<div title=\"data-claim=decoy\">5 < 6 <span data-claim=\"real\">x</span></div><img data-claim=\"v\">".to_array()
+  json_inspect(find_data_claims(doc), content=["real", "v"])
 }

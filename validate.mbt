@@ -486,17 +486,222 @@ fn find_close_tag(doc : Array[Char], name : String, from : Int) -> Int {
 }
 
 ///|
-/// Number of `<section>` elements carrying class `slide`. M2.1b replaces this
-/// count with `scan_deck(doc).length()` once the per-slide model exists.
-fn count_slides(doc : Array[Char]) -> Int {
-  let mut count = 0
-  for lt in find_all_open_tags(doc, "section") {
-    let (_, lo, hi, _) = scan_open_tag(doc, lt)
-    if has_class(doc, lo, hi, "slide") {
-      count = count + 1
+/// Whether `tag` (ASCII-lowercase) names an HTML void element — one that never
+/// has content or a close tag. `match_close` returns an empty span for these so
+/// a `<img>`/`<br>` is not treated as an unclosed container.
+fn is_void_tag(tag : String) -> Bool {
+  match tag {
+    "area"
+    | "base"
+    | "br"
+    | "col"
+    | "embed"
+    | "hr"
+    | "img"
+    | "input"
+    | "link"
+    | "meta"
+    | "param"
+    | "source"
+    | "track"
+    | "wbr" => true
+    _ => false
+  }
+}
+
+///|
+/// If a `</name>` close tag begins at index `i` within `doc[:end]`, return the
+/// index just past its `>`; otherwise `None`. A name boundary (whitespace, `>`,
+/// `/`, or region end) is required, so `</div>` does not match `</division>`.
+fn is_close_tag_at(
+  doc : Array[Char],
+  i : Int,
+  name : Array[Char],
+  end : Int,
+) -> Int? {
+  let m = name.length()
+  if i + 2 + m > end || doc[i] != '<' || doc[i + 1] != '/' {
+    return None
+  }
+  if !ci_matches_at(doc, i + 2, name) {
+    return None
+  }
+  let after = i + 2 + m
+  if after < end {
+    let c = doc[after]
+    if !(is_space(c) || c == '>' || c == '/') {
+      return None
     }
   }
-  count
+  Some(skip_tag(doc, i, end))
+}
+
+///|
+/// Given `from` positioned just past a `name` open tag's `>`, find that element's
+/// matching close within `doc[:end]`, returning `(close_lt, past_gt)`: the index
+/// of the close tag's `<` and the index just past its `>`. Depth-matched, so a
+/// nested same-name element's close does not end the parent (`<div><div></div>`
+/// resolves to the outer `</div>`). A void `name` has no content, yielding
+/// `(from, from)`; an unbalanced element yields `(end, end)`.
+fn match_close(
+  doc : Array[Char],
+  name : String,
+  from : Int,
+  end : Int,
+) -> (Int, Int) {
+  if is_void_tag(name) {
+    return (from, from)
+  }
+  let needle = name.to_array()
+  let m = needle.length()
+  let mut depth = 1
+  let mut i = from
+  while i < end {
+    if doc[i] == '<' {
+      match is_close_tag_at(doc, i, needle, end) {
+        Some(past) => {
+          depth = depth - 1
+          if depth == 0 {
+            return (i, past)
+          }
+          i = past
+        }
+        None => {
+          // A same-name open tag raises depth; any other tag is skipped whole
+          // (quote-aware), so a `>` inside an attribute value never mis-splits.
+          let mut opened = false
+          if i + 1 < end &&
+            doc[i + 1] != '/' &&
+            ci_matches_at(doc, i + 1, needle) {
+            let after = i + 1 + m
+            if after >= end ||
+              is_space(doc[after]) ||
+              doc[after] == '>' ||
+              doc[after] == '/' {
+              opened = true
+            }
+          }
+          if opened {
+            depth = depth + 1
+          }
+          i = skip_tag(doc, i, end)
+        }
+      }
+    } else {
+      i = i + 1
+    }
+  }
+  (end, end)
+}
+
+// -- Element discovery -------------------------------------------------------
+
+///|
+/// A matched element: its ASCII-lowercase `tag` name, the class `token` it
+/// matched on, and the half-open `[lo, hi)` span of its inner HTML (between the
+/// open tag's `>` and the close tag's `<`).
+priv struct Elem {
+  tag : String
+  token : String
+  lo : Int
+  hi : Int
+}
+
+///|
+/// The first of `tokens` that appears as a whole class on the open tag with
+/// attribute region `doc[lo:hi]`, or `None` if the element carries none of them.
+fn match_class(
+  doc : Array[Char],
+  lo : Int,
+  hi : Int,
+  tokens : Array[String],
+) -> String? {
+  for tk in tokens {
+    if has_class(doc, lo, hi, tk) {
+      return Some(tk)
+    }
+  }
+  None
+}
+
+///|
+/// The outermost elements within `doc[start:end]` whose class carries one of
+/// `tokens`, in document order. A match's body is skipped (via `match_close`), so
+/// a nested same-class element is not reported as a sibling; non-matching
+/// elements are descended into. Every tag is skipped past its real `>`, so a `<`
+/// inside a quoted attribute value is never mistaken for a tag.
+fn find_by_class(
+  doc : Array[Char],
+  start : Int,
+  end : Int,
+  tokens : Array[String],
+) -> Array[Elem] {
+  let out : Array[Elem] = []
+  let mut i = start
+  while i < end {
+    if doc[i] == '<' {
+      if i + 1 < end && (doc[i + 1] == '/' || doc[i + 1] == '!') {
+        i = skip_tag(doc, i, end)
+      } else {
+        let (tag, lo, hi, past_gt) = scan_open_tag(doc, i)
+        match match_class(doc, lo, hi, tokens) {
+          Some(tk) => {
+            let (close_lt, close_past) = match_close(doc, tag, past_gt, end)
+            out.push(Elem::{ tag, token: tk, lo: past_gt, hi: close_lt })
+            i = close_past
+          }
+          None => i = past_gt
+        }
+      }
+    } else {
+      i = i + 1
+    }
+  }
+  out
+}
+
+// -- Slide model -------------------------------------------------------------
+
+///|
+/// One `.entry` within a slide. An empty marker in M2.1b; M2.1c fills it with the
+/// three-tier text and furigana it carries.
+priv struct Entry {}
+
+///|
+/// A parsed `<section class="slide">`: the counts of its `.eyebrow` and `.pageno`
+/// children and its list of `.entry` elements. The counts drive the "exactly one"
+/// checks; the list drives the "at least one entry" check.
+priv struct Slide {
+  eyebrow_count : Int
+  pageno_count : Int
+  entries : Array[Entry]
+}
+
+///|
+/// Parse every `<section class="slide">` into a `Slide`, tallying its outermost
+/// `.eyebrow`/`.pageno`/`.entry` descendants. Only `<section>` elements count as
+/// slides (a stray `<div class="slide">` is ignored). Replaces the M2.1a slide
+/// count: `scan_deck(doc).length()` is the slide total.
+fn scan_deck(doc : Array[Char]) -> Array[Slide] {
+  let slides : Array[Slide] = []
+  for el in find_by_class(doc, 0, doc.length(), ["slide"]) {
+    if el.tag != "section" {
+      continue
+    }
+    let mut eyebrow_count = 0
+    let mut pageno_count = 0
+    let entries : Array[Entry] = []
+    for part in find_by_class(doc, el.lo, el.hi, ["eyebrow", "pageno", "entry"]) {
+      match part.token {
+        "eyebrow" => eyebrow_count = eyebrow_count + 1
+        "pageno" => pageno_count = pageno_count + 1
+        "entry" => entries.push(Entry::{  })
+        _ => ()
+      }
+    }
+    slides.push(Slide::{ eyebrow_count, pageno_count, entries })
+  }
+  slides
 }
 
 // -- Checks ------------------------------------------------------------------
@@ -571,6 +776,31 @@ fn check_frame(doc : Array[Char], out : Report) -> Unit {
 }
 
 ///|
+/// Per-slide structure checks: every slide must carry exactly one `.eyebrow`
+/// (`slide.eyebrow_count`) and exactly one `.pageno` (`slide.pageno_count`), and
+/// at least one `.entry` (`slide.no_entry`). Text and furigana checks are added
+/// in later M2.1 slices.
+fn check_slides(slides : Array[Slide], out : Report) -> Unit {
+  for s in slides {
+    if s.eyebrow_count != 1 {
+      out.findings.push(
+        must("slide.eyebrow_count", "slide must have exactly one .eyebrow"),
+      )
+    }
+    if s.pageno_count != 1 {
+      out.findings.push(
+        must("slide.pageno_count", "slide must have exactly one .pageno"),
+      )
+    }
+    if s.entries.length() == 0 {
+      out.findings.push(
+        must("slide.no_entry", "slide must have at least one .entry"),
+      )
+    }
+  }
+}
+
+///|
 /// Image checks: every `<img>` must have a `src` under `assets/`
 /// (`img.not_asset`) that names an asset file present in the bundle
 /// (`img.missing`). `assets` holds `assets/<name>` paths from `list_assets`.
@@ -614,9 +844,11 @@ pub fn validate_deck(
   let doc = strip_raw_text(strip_comments(html.to_array()))
   let out = Report::{ findings: [] }
   check_frame(doc, out)
-  if count_slides(doc) == 0 {
+  let slides = scan_deck(doc)
+  if slides.length() == 0 {
     out.findings.push(must("frame.no_slides", "no <section class=\"slide\">"))
   }
+  check_slides(slides, out)
   check_imgs(doc, assets, out)
   out
 }

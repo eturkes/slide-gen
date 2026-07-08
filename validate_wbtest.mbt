@@ -71,3 +71,40 @@ test "index_ci case-insensitive and absent" {
   assert_eq(index_ci("HELLO".to_array(), "ell".to_array()), 1)
   assert_eq(index_ci("abc".to_array(), "xyz".to_array()), -1)
 }
+
+///|
+/// `match_close` depth-matches a nested same-name element, so a child's close
+/// tag does not end the parent: `<div><div></div></div>` resolves to the outer
+/// `</div>` (its `<` at index 16, past-`>` at 22), not the inner one at 10.
+test "match_close depth-matches nested same-name tags" {
+  let doc = "<div><div></div></div>".to_array()
+  // from = 5, just past the outer <div>'s '>'.
+  let (close_lt, past_gt) = match_close(doc, "div", 5, doc.length())
+  inspect("\{close_lt}|\{past_gt}", content="16|22")
+}
+
+///|
+/// `find_by_class` reports outermost matches as siblings and never descends into
+/// a match's body, so a nested same-class element is not double-counted: an outer
+/// `.x` wrapping an inner `.x`, plus a sibling `.x`, yields exactly two elements.
+test "find_by_class reports siblings, not nested duplicates" {
+  let doc = "<div class=\"x\"><div class=\"x\">inner</div></div><div class=\"x\">sib</div>".to_array()
+  let elems = find_by_class(doc, 0, doc.length(), ["x"])
+  assert_eq(elems.length(), 2)
+  // The second match is the sibling, not the nested inner .x.
+  inspect(range_to_string(doc, elems[1].lo, elems[1].hi), content="sib")
+}
+
+///|
+/// `scan_deck` parses a `<section class="slide">` into one `Slide`, tallying its
+/// outermost `.eyebrow`/`.pageno`/`.entry` descendants (the nested `.n` and `.jp`
+/// are inside skipped bodies, so they do not inflate the counts).
+test "scan_deck parses one builder slide" {
+  let html = "<section class=\"slide\"><div class=\"eyebrow\"><span class=\"n\">01</span></div><div class=\"entry\"><div class=\"jp\">a</div></div><div class=\"pageno\">p</div></section>"
+  let slides = scan_deck(html.to_array())
+  assert_eq(slides.length(), 1)
+  inspect(
+    "\{slides[0].eyebrow_count}|\{slides[0].pageno_count}|\{slides[0].entries.length()}",
+    content="1|1|1",
+  )
+}

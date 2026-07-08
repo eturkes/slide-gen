@@ -1,15 +1,47 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 ///|
+/// One three-tier `.entry` (JA / furigana / EN). Structurally complete for the
+/// slide-count checks; its text content is exercised by later M2.1 slices.
+fn entry() -> String {
+  "<div class=\"entry\"><div class=\"jp\">a</div><div class=\"jpf\">a</div><div class=\"en\">A</div></div>"
+}
+
+///|
+/// One `.eyebrow` with its `.n` section number.
+fn eyebrow(n : String) -> String {
+  "<div class=\"eyebrow\"><span class=\"n\">\{n}</span><span>l</span></div>"
+}
+
+///|
+/// One `.pageno` footer carrying `text`.
+fn pageno(text : String) -> String {
+  "<div class=\"pageno\">\{text}</div>"
+}
+
+///|
+/// A `<section class="slide">` from an eyebrow, an entries fragment, and a
+/// pageno — the smallest deck slide that passes the M2.1b structure checks.
+fn slide_of(e : String, es : String, p : String) -> String {
+  "<section class=\"slide\">\{e}\{es}\{p}</section>"
+}
+
+///|
 /// Assemble a deck's HTML from envelope parts. Every part defaults to a valid
-/// value, so overriding one seeds a single defect in isolation.
+/// value, so overriding one seeds a single defect in isolation. The default
+/// section is a structurally complete one-slide deck (eyebrow + entry + pageno),
+/// so envelope/image tests do not trip the M2.1b slide-structure checks.
 fn envelope(
   doctype? : String = "<!doctype html>",
   html_open? : String = "<html lang=\"ja\">",
   charset? : String = "<meta charset=\"utf-8\">",
   style? : String = "<style>body{}</style>",
   body_open? : String = "<body>",
-  sections? : String = "<section class=\"slide\"></section>",
+  sections? : String = slide_of(
+    eyebrow("01"),
+    entry(),
+    pageno("project \u{b7} 1 / 1"),
+  ),
   body_close? : String = "</body>",
   html_close? : String = "</html>",
 ) -> String {
@@ -30,7 +62,7 @@ fn no_assets() -> @set.Set[String] {
 test "good envelope passes; commented decoys ignored" {
   json_inspect(validate_deck(envelope(), "project", no_assets()).codes(), content=[])
   let with_decoy = envelope(
-    sections="<!-- <section class=\"slide\"></section> <img src=\"assets/z.png\"> --><section class=\"slide\"></section>",
+    sections="<!-- <section class=\"slide\"></section> <img src=\"assets/z.png\"> -->\{slide_of(eyebrow("01"), entry(), pageno("project \u{b7} 1 / 1"))}",
   )
   json_inspect(validate_deck(with_decoy, "project", no_assets()).codes(), content=[])
   // An <img> written inside a CSS comment in <style> is raw text, not markup.
@@ -114,18 +146,8 @@ test "unclosed <style> swallows a decoy <img> rather than leaking img.not_asset"
 /// `<style>` opened (and left unclosed) after `<body>`: the close must follow the
 /// open it closes, else an unclosed style would validate clean.
 test "frame.style requires the close to follow its own open" {
-  let deck =
-    #|<!doctype html>
-    #|<html lang="ja">
-    #|<head>
-    #|<meta charset="utf-8">
-    #|</style>
-    #|</head>
-    #|<body>
-    #|<section class="slide"></section>
-    #|<style>body{}</body>
-    #|</html>
-    #|
+  let slide = slide_of(eyebrow("01"), entry(), pageno("project \u{b7} 1 / 1"))
+  let deck = "<!doctype html>\n<html lang=\"ja\">\n<head>\n<meta charset=\"utf-8\">\n</style>\n</head>\n<body>\n\{slide}\n<style>body{}</body>\n</html>\n"
   json_inspect(validate_deck(deck, "project", no_assets()).codes(), content=[
     "frame.style", "frame.body",
   ])
@@ -137,19 +159,56 @@ test "frame.style requires the close to follow its own open" {
 /// asset present passes clean.
 test "image checks map to their codes" {
   let not_asset = envelope(
-    sections="<section class=\"slide\"><img src=\"foo.png\"></section>",
+    sections=slide_of(
+      eyebrow("01"),
+      entry() + "<img src=\"foo.png\">",
+      pageno("project \u{b7} 1 / 1"),
+    ),
   )
   json_inspect(validate_deck(not_asset, "project", no_assets()).codes(), content=[
     "img.not_asset",
   ])
   let missing = envelope(
-    sections="<section class=\"slide\"><img src=\"assets/x.png\"></section>",
+    sections=slide_of(
+      eyebrow("01"),
+      entry() + "<img src=\"assets/x.png\">",
+      pageno("project \u{b7} 1 / 1"),
+    ),
   )
   json_inspect(validate_deck(missing, "project", no_assets()).codes(), content=[
     "img.missing",
   ])
   let present : @set.Set[String] = @set.Set(["assets/x.png"][:])
   json_inspect(validate_deck(missing, "project", present).codes(), content=[])
+}
+
+///|
+/// Each seeded slide-structure defect surfaces exactly its code: a duplicate
+/// `.eyebrow` or `.pageno` breaks the "exactly one" count, and a slide with no
+/// `.entry` flags `slide.no_entry`.
+test "slide structure defects each map to their code" {
+  let dup_eyebrow = envelope(
+    sections=slide_of(
+      eyebrow("01") + eyebrow("02"),
+      entry(),
+      pageno("project \u{b7} 1 / 1"),
+    ),
+  )
+  json_inspect(validate_deck(dup_eyebrow, "project", no_assets()).codes(), content=[
+    "slide.eyebrow_count",
+  ])
+  let dup_pageno = envelope(
+    sections=slide_of(eyebrow("01"), entry(), pageno("a") + pageno("b")),
+  )
+  json_inspect(validate_deck(dup_pageno, "project", no_assets()).codes(), content=[
+    "slide.pageno_count",
+  ])
+  let no_entry = envelope(
+    sections=slide_of(eyebrow("01"), "", pageno("project \u{b7} 1 / 1")),
+  )
+  json_inspect(validate_deck(no_entry, "project", no_assets()).codes(), content=[
+    "slide.no_entry",
+  ])
 }
 
 ///|
@@ -163,7 +222,11 @@ async test "validate_deck_dir over a disk bundle" {
     @fs.mkdir("\{dir}/assets")
     @fs.write_file("\{dir}/assets/x.png", "", create_mode=CreateOrTruncate)
     let deck = envelope(
-      sections="<section class=\"slide\"><img src=\"assets/x.png\"></section>",
+      sections=slide_of(
+        eyebrow("01"),
+        entry() + "<img src=\"assets/x.png\">",
+        pageno("project \u{b7} 1 / 1"),
+      ),
     )
     @fs.write_file("\{dir}/deck.html", deck, create_mode=CreateOrTruncate)
     json_inspect(validate_deck_dir(dir, "project").codes(), content=[])

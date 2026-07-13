@@ -1,5 +1,7 @@
 # Claude Code — track shared settings.json, ignore machine-local override
 .claude/settings.local.json
+# Headroom live-wrap marker (ephemeral pid/port/env key; per session, removed on exit)
+.claude/.headroom_wrap_marker.json
 
 # Python / uv (per-layer envs)
 .venv/

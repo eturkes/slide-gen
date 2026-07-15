@@ -11,17 +11,21 @@ pub let default_timeout_secs : Int = 1800
 /// Resolved filesystem plan for generating `project`'s deck, derived from the
 /// repo `root`. `cwd` (the repo parent) is codex's working root and the
 /// provenance source base, so sibling sources are cited parent-relative;
+/// `root` also anchors the uv project used only by the authoring-time furigana
+/// helper;
 /// `source_dir` is the project being documented; `template` is the style
 /// contract; `prompt_contract` is the versioned authoring contract loaded for
-/// each invocation; `stage_dir` is the temporary bundle codex writes into;
-/// `deck_dir` is the committed home the staged bundle is promoted to once it
-/// validates.
+/// each invocation; `furigana_tool` is the post-Codex analyzer; `stage_dir` is
+/// the temporary bundle codex writes into; `deck_dir` is the committed home the
+/// staged bundle is promoted to once it validates.
 priv struct GenPlan {
   project : String
+  root : String
   cwd : String
   source_dir : String
   template : String
   prompt_contract : String
+  furigana_tool : String
   stage_dir : String
   deck_dir : String
 }
@@ -63,10 +67,12 @@ fn plan_generate(root : String, project : String) -> GenPlan {
   let (parent, _) = split_path(root)
   GenPlan::{
     project,
+    root,
     cwd: parent,
     source_dir: join_path(parent, project),
     template: join_path(root, "templates/deck.html"),
     prompt_contract: join_path(root, "templates/deck-prompt.md"),
+    furigana_tool: join_path(root, "tools/furigana_check.py"),
     stage_dir: join_path(root, "decks/.partial/\{project}"),
     deck_dir: join_path(root, "decks/\{project}"),
   }
@@ -277,14 +283,31 @@ async fn promote_stage(plan : GenPlan) -> Unit {
 }
 
 ///|
-/// Run a producer into a fresh stage, apply its post-run confinement tripwire,
-/// validate the whole bundle, and publish only a passing report. Producer exits
-/// and blocking validation reports consume the retry budget; a confinement
-/// finding is immediately terminal because an out-of-bundle write has already
-/// occurred. Failed or retained stages remain available for inspection.
+/// Assert the stage root itself is a real directory rather than a symlink. The
+/// validator follows symlinks by design, so this no-follow check brackets the
+/// sidecar and promotion boundaries where writes/renames would be dangerous.
+async fn stage_is_real_directory(path : String) -> Bool {
+  try @fs.kind(path, follow_symlink=false) catch {
+    _ => false
+  } noraise {
+    @fs.Directory => true
+    _ => false
+  }
+}
+
+///|
+/// Run a producer into a fresh stage, tripwire + validate its raw output, run
+/// the authoring-time postprocessor, then tripwire + validate again before
+/// publishing. The pre-pass preserves precise partial-output diagnostics and
+/// prevents a sidecar from touching an already-invalid bundle; the post-pass
+/// covers the sidecar's writes. Producer/postprocessor exits and blocking
+/// reports consume the retry budget; a confinement finding is immediately
+/// terminal because an out-of-bundle write has already occurred. Failed or
+/// retained stages remain available for inspection.
 async fn stage_validate_promote(
   plan : GenPlan,
   produce~ : async (GenPlan) -> (Int, String, String),
+  postprocess~ : async (GenPlan) -> (Int, String),
   confine~ : async (GenPlan) -> String?,
   retries? : Int = 1,
 ) -> GenOutcome {
@@ -301,25 +324,39 @@ async fn stage_validate_promote(
       Some(offenders) => return ExecFailed("write escaped bundle: \{offenders}")
       None => ()
     }
-    let report = validate_bundle_dir(
+    let initial_report = validate_bundle_dir(
       plan.stage_dir,
       plan.project,
       plan.cwd,
       split_path(plan.deck_dir).0,
     )
-    if !report.ok() {
-      last = Retained(report)
+    if !initial_report.ok() {
+      last = Retained(initial_report)
       continue
     }
-    let stage_is_directory = try
-      @fs.kind(plan.stage_dir, follow_symlink=false)
-    catch {
-      _ => false
-    } noraise {
-      @fs.Directory => true
-      _ => false
+    if !stage_is_real_directory(plan.stage_dir) {
+      return ExecFailed("stage root is not a directory")
     }
-    if !stage_is_directory {
+    let (post_code, post_stderr) = postprocess(plan)
+    if post_code != 0 {
+      last = ExecFailed(post_stderr)
+      continue
+    }
+    match confine(plan) {
+      Some(offenders) => return ExecFailed("write escaped bundle: \{offenders}")
+      None => ()
+    }
+    let final_report = validate_bundle_dir(
+      plan.stage_dir,
+      plan.project,
+      plan.cwd,
+      split_path(plan.deck_dir).0,
+    )
+    if !final_report.ok() {
+      last = Retained(final_report)
+      continue
+    }
+    if !stage_is_real_directory(plan.stage_dir) {
       return ExecFailed("stage root is not a directory")
     }
     let promote_error : String? = try promote_stage(plan) catch {
@@ -329,10 +366,59 @@ async fn stage_validate_promote(
     }
     match promote_error {
       Some(error) => return ExecFailed("promote failed: \{error}")
-      None => return Promoted(report)
+      None => return Promoted(final_report)
     }
   }
   last
+}
+
+///|
+/// Exact uv-managed authoring command run after Codex succeeds. `--locked`
+/// rejects dependency drift and `--no-dev` excludes Ruff; Python and UniDic are
+/// external authoring dependencies rather than linked into the MoonBit binary.
+fn build_furigana_argv(plan : GenPlan) -> Array[String] {
+  [
+    "uv",
+    "run",
+    "--locked",
+    "--no-dev",
+    "python",
+    plan.furigana_tool,
+    plan.stage_dir,
+  ]
+}
+
+///|
+/// Cross-check the freshly authored deck, appending structured review entries
+/// to gaps.md for UniDic disagreements/unknowns. Review findings exit zero;
+/// only a broken tool/dependency/input path blocks publication.
+async fn run_furigana(plan : GenPlan) -> (Int, String) {
+  let argv = build_furigana_argv(plan)
+  try {
+    let (code, stdout, stderr) = @process.collect_output(
+      argv[0],
+      argv[1:],
+      cwd=plan.root,
+    )
+    if code == 0 {
+      (0, "")
+    } else {
+      let err = stderr.text()
+      let out = stdout.text()
+      let detail = if !err.is_empty() {
+        err
+      } else if !out.is_empty() {
+        out
+      } else {
+        "exit code \{code}"
+      }
+      (code, "furigana check failed: \{detail}")
+    }
+  } catch {
+    error => (1, "furigana check failed to start: \{error}")
+  } noraise {
+    result => result
+  }
 }
 
 ///|
@@ -453,7 +539,12 @@ pub async fn generate_project(root : String, project : String) -> GenOutcome {
     check_tracked_confinement(p, baseline)
   }
 
-  stage_validate_promote(plan, produce=run_codex, confine~)
+  stage_validate_promote(
+    plan,
+    produce=run_codex,
+    postprocess=run_furigana,
+    confine~,
+  )
 }
 
 ///|
@@ -567,6 +658,7 @@ fn render_dry_run_text(
   sb.write_string("deck:      \{plan.deck_dir}\n")
   sb.write_string("cwd:       \{plan.cwd}\n")
   sb.write_string("argv:      \{join_argv(argv)}\n\n")
+  sb.write_string("post:      \{join_argv(build_furigana_argv(plan))}\n\n")
   sb.write_string("--- prompt (stdin) ---\n")
   sb.write_string(prompt)
   if !prompt.has_suffix("\n") {

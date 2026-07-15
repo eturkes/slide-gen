@@ -2,3 +2,20 @@
 - Adjudication and correction status for individual data-quality flags is unavailable to this bundle. Checked the tracked aggregate summary and the README privacy split; the ignored row-level report was deliberately excluded because it can contain identifiers and offending values. Human action: an authorized reviewer should audit the private report and return only an approved aggregate adjudication summary.
 - Prediction-head counts conflict across committed sources: `README.md` still describes six heads, while `src/rehab_sci/models/outcomes.py` and `models/training_metrics.json` enumerate eleven. The deck follows the current registry/metrics. Human action: confirm that eleven is canonical and update the stale README references.
 - Distribution/use terms remain incomplete: `README.md` says the code is internal research code with no public license. Checked the license section and found no separate license file in the tracked file list. Human action: the rights holder should supply approved terms before redistribution or external use.
+
+<!-- furigana-check:start -->
+## Furigana analyzer review
+
+UniDic could not independently confirm these authored ruby readings:
+
+- term: "日本語"
+  entry: 1
+  codex-reading: "にほんご"
+  analyzer-reading: "にっぽんご"
+  human-review: required
+- term: "日本語"
+  entry: 11
+  codex-reading: "にほんご"
+  analyzer-reading: "にっぽんご"
+  human-review: required
+<!-- furigana-check:end -->

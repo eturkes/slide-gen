@@ -110,7 +110,9 @@ Write either the exact line `no gaps` or Markdown bullets. Each bullet names the
 missing fact or uncertain reading, what was checked, and the smallest useful
 human action. Include unresolved provenance, raw-data-only figures, unavailable
 dependencies, source conflicts, and furigana uncertainty. Do not use “no gaps”
-when any such issue remains.
+when any such issue remains. Reserve `<!-- furigana-check:start -->` and
+`<!-- furigana-check:end -->` for the post-generation analyzer; place authored
+human-review bullets outside that managed block.
 
 ### Figures (conditional)
 

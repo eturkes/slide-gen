@@ -68,6 +68,11 @@ async test "render_dry_run loads the versioned prompt and embeds the template" {
   assert_true(out.contains("source:    \{split_path(root).0}/projA\n"))
   assert_true(out.contains("prompt:    \{root}/templates/deck-prompt.md\n"))
   assert_true(out.contains("decks/.partial/projA"))
+  assert_true(
+    out.contains(
+      "post:      uv run --locked --no-dev python \{root}/tools/furigana_check.py \{root}/decks/.partial/projA\n",
+    ),
+  )
   assert_true(out.contains("--- prompt (stdin) ---"))
   assert_false(out.has_suffix("\n\n"))
 }

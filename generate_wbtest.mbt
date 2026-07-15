@@ -94,10 +94,12 @@ test "build_prompt composes contract runtime inputs and embedded style" {
 /// and the pure dry-run renderer shell-quotes only the spaced cwd argv element.
 test "generation plan and dry-run paths stay canonical" {
   let at_root = plan_generate("/slide-gen", "projA")
+  assert_eq(at_root.root, "/slide-gen")
   assert_eq(at_root.cwd, "/")
   assert_eq(at_root.source_dir, "/projA")
   assert_eq(at_root.template, "/slide-gen/templates/deck.html")
   assert_eq(at_root.prompt_contract, "/slide-gen/templates/deck-prompt.md")
+  assert_eq(at_root.furigana_tool, "/slide-gen/tools/furigana_check.py")
   assert_eq(at_root.stage_dir, "/slide-gen/decks/.partial/projA")
   let trailing = plan_generate("/w/Projects/slide-gen/", "projA")
   assert_eq(trailing.template, "/w/Projects/slide-gen/templates/deck.html")
@@ -109,8 +111,24 @@ test "generation plan and dry-run paths stay canonical" {
   let spaced = plan_generate("/w/My Projects/slide-gen", "projA")
   let shown = render_dry_run_text(spaced, "prompt\n", 900)
   assert_true(shown.contains("-C '/w/My Projects'\n"))
+  assert_true(
+    shown.contains(
+      "post:      uv run --locked --no-dev python '/w/My Projects/slide-gen/tools/furigana_check.py' '/w/My Projects/slide-gen/decks/.partial/projA'\n",
+    ),
+  )
   assert_true(shown.contains("cwd:       /w/My Projects\n"))
   assert_false(shown.has_suffix("\n\n"))
+}
+
+///|
+/// The analyzer command is uv-locked, excludes development-only Ruff, and
+/// receives the helper and stage as direct argv elements (never shell text).
+test "build_furigana_argv pins the authoring sidecar boundary" {
+  let plan = plan_generate("/w/Projects/slide-gen", "projA")
+  json_inspect(build_furigana_argv(plan), content=[
+    "uv", "run", "--locked", "--no-dev", "python", "/w/Projects/slide-gen/tools/furigana_check.py",
+    "/w/Projects/slide-gen/decks/.partial/projA",
+  ])
 }
 
 ///|
@@ -122,6 +140,40 @@ async test "run_codex reports prompt load failure before execution" {
   assert_eq(code, 1)
   assert_eq(stdout, "")
   assert_true(stderr.has_prefix("prompt load failed:"))
+}
+
+///|
+/// The real uv sidecar runs against a staged controlled deck and converts a
+/// wrong common-word reading into a non-blocking structured gaps.md entry.
+async test "run_furigana executes the locked analyzer against the stage" {
+  guard find_repo_root() is Some(source_root) else { return }
+  @async.with_task_group() <| group => {
+    let tmp = @fs.tmpdir(prefix="slide-gen-furigana")
+    group.add_defer(() => @fs.rmdir(tmp, recursive=true))
+    let plan = GenPlan::{
+      ..gen_stub_plan(tmp),
+      root: source_root,
+      furigana_tool: "\{source_root}/tools/furigana_check.py",
+    }
+    @fs.mkdir(plan.stage_dir, recursive=true)
+    @fs.write_file(
+      "\{plan.stage_dir}/deck.html",
+      "<!doctype html><html lang=\"ja\"><body><div class=\"jp\">学校です。</div><div class=\"jpf\"><ruby>学校<rt>がくこう</rt></ruby>です。</div></body></html>\n",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
+      "\{plan.stage_dir}/gaps.md",
+      "no gaps\n",
+      create_mode=CreateOrTruncate,
+    )
+    let (code, error) = run_furigana(plan)
+    assert_eq(code, 0, msg=error)
+    assert_eq(error, "")
+    let gaps = @fs.read_file("\{plan.stage_dir}/gaps.md").text()
+    assert_true(gaps.contains("furigana-check:start"))
+    assert_true(gaps.contains("codex-reading: \"がくこう\""))
+    assert_true(gaps.contains("analyzer-reading: \"がっこう\""))
+  }
 }
 
 ///|
@@ -138,10 +190,12 @@ fn gen_stub_deck(project : String, entry? : String = "a") -> String {
 fn gen_stub_plan(root : String, project? : String = "project") -> GenPlan {
   GenPlan::{
     project,
+    root,
     cwd: root,
     source_dir: "\{root}/\{project}",
     template: "\{root}/template.html",
     prompt_contract: "\{root}/deck-prompt.md",
+    furigana_tool: "\{root}/tools/furigana_check.py",
     stage_dir: "\{root}/decks/.partial/\{project}",
     deck_dir: "\{root}/decks/\{project}",
   }
@@ -175,6 +229,13 @@ async fn allow_gen_stage(plan : GenPlan) -> String? {
 }
 
 ///|
+/// Passing postprocessor seam for orchestration tests that do not exercise uv.
+async fn pass_gen_postprocess(plan : GenPlan) -> (Int, String) {
+  ignore(@fs.exists(plan.stage_dir))
+  (0, "")
+}
+
+///|
 /// A passing bundle promotes over an existing published deck. A symlink planted
 /// at the stage root is unlinked rather than recursively traversed, preserving
 /// its target before the clean stage is rebuilt.
@@ -202,6 +263,7 @@ async test "stage_validate_promote safely rebuilds and promotes a passing bundle
     let outcome = stage_validate_promote(
       plan,
       produce~,
+      postprocess=pass_gen_postprocess,
       confine=allow_gen_stage,
     )
     guard outcome is Promoted(report) else {
@@ -224,15 +286,23 @@ async test "stage_validate_promote retains an invalid bundle after one retry" {
     group.add_defer(() => @fs.rmdir(root, recursive=true))
     let plan = gen_stub_plan(root)
     let mut calls = 0
+    let mut post_calls = 0
     async fn produce(p : GenPlan) -> (Int, String, String) {
       calls = calls + 1
       ignore(@fs.exists(p.stage_dir))
       (0, "", "")
     }
 
+    async fn postprocess(p : GenPlan) -> (Int, String) {
+      post_calls = post_calls + 1
+      ignore(@fs.exists(p.stage_dir))
+      (0, "")
+    }
+
     let outcome = stage_validate_promote(
       plan,
       produce~,
+      postprocess~,
       confine=allow_gen_stage,
     )
     guard outcome is Retained(report) else {
@@ -240,6 +310,7 @@ async test "stage_validate_promote retains an invalid bundle after one retry" {
     }
     json_inspect(report.codes(), content=["deck.missing"])
     assert_eq(calls, 2)
+    assert_eq(post_calls, 0)
     assert_true(@fs.exists(plan.stage_dir))
     assert_false(@fs.exists(plan.deck_dir))
   }
@@ -261,6 +332,7 @@ async test "stage_validate_promote reports producer failure" {
     let outcome = stage_validate_promote(
       plan,
       produce~,
+      postprocess=pass_gen_postprocess,
       confine=allow_gen_stage,
       retries=0,
     )
@@ -269,6 +341,79 @@ async test "stage_validate_promote reports producer failure" {
     }
     assert_eq(message, "codex failed")
     assert_true(@fs.exists(plan.stage_dir))
+    assert_false(@fs.exists(plan.deck_dir))
+  }
+}
+
+///|
+/// A broken postprocessor consumes the retry budget and blocks validation and
+/// publication even when Codex produced a validator-clean bundle.
+async test "stage_validate_promote reports postprocessor failure" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-stage-post")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = gen_stub_plan(root)
+    let mut calls = 0
+    async fn produce(p : GenPlan) -> (Int, String, String) {
+      write_gen_stub(p)
+      (0, "", "")
+    }
+
+    async fn postprocess(p : GenPlan) -> (Int, String) {
+      calls = calls + 1
+      ignore(@fs.exists(p.stage_dir))
+      (8, "furigana check failed")
+    }
+
+    let outcome = stage_validate_promote(
+      plan,
+      produce~,
+      postprocess~,
+      confine=allow_gen_stage,
+    )
+    guard outcome is ExecFailed(message) else {
+      abort("postprocessor failure was not reported")
+    }
+    assert_eq(message, "furigana check failed")
+    assert_eq(calls, 2)
+    assert_true(@fs.exists("\{plan.stage_dir}/deck.html"))
+    assert_false(@fs.exists(plan.deck_dir))
+  }
+}
+
+///|
+/// A zero-exit postprocessor still cannot bypass the deterministic bundle gate:
+/// its malformed gaps rewrite is caught by the final validation pass and retained.
+async test "stage_validate_promote revalidates postprocessor writes" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-stage-post-invalid")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = gen_stub_plan(root)
+    async fn produce(p : GenPlan) -> (Int, String, String) {
+      write_gen_stub(p)
+      (0, "", "")
+    }
+
+    async fn postprocess(p : GenPlan) -> (Int, String) {
+      @fs.write_file(
+        "\{p.stage_dir}/gaps.md",
+        "opaque prose\n",
+        create_mode=CreateOrTruncate,
+      )
+      (0, "")
+    }
+
+    let outcome = stage_validate_promote(
+      plan,
+      produce~,
+      postprocess~,
+      confine=allow_gen_stage,
+      retries=0,
+    )
+    guard outcome is Retained(report) else {
+      abort("invalid postprocessor rewrite was not retained")
+    }
+    json_inspect(report.codes(), content=["gaps.empty"])
     assert_false(@fs.exists(plan.deck_dir))
   }
 }
@@ -293,7 +438,12 @@ async test "stage_validate_promote blocks escaped writes without retry" {
       Some("tracked.txt")
     }
 
-    let outcome = stage_validate_promote(plan, produce~, confine~)
+    let outcome = stage_validate_promote(
+      plan,
+      produce~,
+      postprocess=pass_gen_postprocess,
+      confine~,
+    )
     guard outcome is ExecFailed(message) else {
       abort("escaped write was not blocked")
     }
@@ -327,6 +477,7 @@ async test "stage_validate_promote retries once then promotes" {
     let outcome = stage_validate_promote(
       plan,
       produce~,
+      postprocess=pass_gen_postprocess,
       confine=allow_gen_stage,
     )
     guard outcome is Promoted(report) else {
@@ -354,6 +505,7 @@ async test "stage_validate_promote preserves warnings on promotion" {
     let outcome = stage_validate_promote(
       plan,
       produce~,
+      postprocess=pass_gen_postprocess,
       confine=allow_gen_stage,
     )
     guard outcome is Promoted(report) else {
@@ -385,6 +537,7 @@ async test "stage_validate_promote rejects a swapped stage-root symlink" {
     let outcome = stage_validate_promote(
       plan,
       produce~,
+      postprocess=pass_gen_postprocess,
       confine=allow_gen_stage,
     )
     guard outcome is ExecFailed(message) else {

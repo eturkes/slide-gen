@@ -3,6 +3,7 @@
 .venv-host/
 __pycache__/
 *.py[cod]
+.ruff_cache/
 
 # Node / pnpm
 node_modules/

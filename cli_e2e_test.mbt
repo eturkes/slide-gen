@@ -175,6 +175,7 @@ async test "generate dry-run end-to-end" {
     assert_true(text.contains("codex exec"))
     assert_true(text.contains("--dangerously-bypass-approvals-and-sandbox"))
     assert_true(text.contains("decks/.partial/projA"))
+    assert_true(text.contains("post:      uv run --locked --no-dev python"))
     assert_true(text.contains("--- prompt (stdin) ---"))
     assert_true(text.contains("RUNTIME PROMPT MARKER"))
     assert_true(text.contains("RUNTIME STYLE MARKER"))
@@ -199,7 +200,8 @@ async test "generate dry-run end-to-end" {
 /// return before setup. A tiny synthetic sibling project plus the shipped style
 /// contract keeps this about plumbing: Codex must exit through the harness and
 /// leave a non-empty deck.html in either the promoted or retained bundle. The
-/// fixture copies both runtime-loaded contracts used by the production binary.
+/// fixture copies both runtime-loaded contracts plus the uv-locked authoring
+/// sidecar used by the production binary.
 async test "generate live codex smoke" {
   guard @env.get_env_var("SLIDE_GEN_LIVE") is Some(_) else { return }
   guard @env.get_env_var("SLIDE_GEN_BIN") is Some(bin) else { return }
@@ -208,6 +210,9 @@ async test "generate live codex smoke" {
   }
   let template = @fs.read_file("\{source_root}/templates/deck.html").text()
   let prompt = @fs.read_file("\{source_root}/templates/deck-prompt.md").text()
+  let pyproject = @fs.read_file("\{source_root}/pyproject.toml").text()
+  let uv_lock = @fs.read_file("\{source_root}/uv.lock").text()
+  let furigana_tool = @fs.read_file("\{source_root}/tools/furigana_check.py").text()
   @async.with_task_group() <| group => {
     let tmp = @fs.tmpdir(prefix="slide-gen-live")
     group.add_defer(() => @fs.rmdir(tmp, recursive=true))
@@ -215,6 +220,7 @@ async test "generate live codex smoke" {
     let repo = "\{projects_dir}/slide-gen"
     let source = "\{projects_dir}/projA"
     @fs.mkdir("\{repo}/templates", recursive=true)
+    @fs.mkdir("\{repo}/tools")
     @fs.mkdir(source)
     @fs.write_file(
       "\{repo}/moon.mod",
@@ -232,6 +238,17 @@ async test "generate live codex smoke" {
       create_mode=CreateOrTruncate,
     )
     @fs.write_file(
+      "\{repo}/pyproject.toml",
+      pyproject,
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file("\{repo}/uv.lock", uv_lock, create_mode=CreateOrTruncate)
+    @fs.write_file(
+      "\{repo}/tools/furigana_check.py",
+      furigana_tool,
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
       "\{source}/README.md",
       "# projA\n\nPurpose: a tiny fixture project for the slide generation smoke.\n",
       create_mode=CreateOrTruncate,
@@ -244,7 +261,10 @@ async test "generate live codex smoke" {
     assert_eq(init_code, 0, msg=init_err.text())
     let (add_code, _, add_err) = @process.collect_output(
       "git",
-      ["add", "moon.mod", "templates/deck.html", "templates/deck-prompt.md"],
+      [
+        "add", "moon.mod", "pyproject.toml", "uv.lock", "templates/deck.html", "templates/deck-prompt.md",
+        "tools/furigana_check.py",
+      ],
       cwd=repo,
     )
     assert_eq(add_code, 0, msg=add_err.text())

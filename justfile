@@ -10,21 +10,25 @@ target := 'native'
 default:
     @just --list
 
-# Format all MoonBit sources in place.
+# Format MoonBit + authoring-time Python sources in place.
 fmt:
     moon fmt
+    uv run --locked --only-dev ruff format tools
 
-# Type-check without codegen.
+# Type-check MoonBit; lint + format-check the Python sidecar.
 check:
     moon check --target {{target}}
+    uv run --locked --only-dev ruff check tools
+    uv run --locked --only-dev ruff format --check tools
 
 # Build the native binary.
 build:
     moon build --target {{target}}
 
-# Run the suite; e2e tests use SLIDE_GEN_BIN. SLIDE_GEN_LIVE=1 opts into Codex.
+# Run MoonBit + Python suites; SLIDE_GEN_LIVE=1 opts into Codex.
 test: build
     SLIDE_GEN_BIN="$(realpath "$(find _build/{{target}} -name main.exe -path '*cmd/main*' -print -quit)")" moon test --target {{target}}
+    uv run --locked --no-dev python -m unittest discover -s tools -p '*_test.py'
 
 # Full gate sweep: format, check, build, test.
 all: fmt check build test

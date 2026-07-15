@@ -56,7 +56,7 @@ async test "render_dry_run loads the versioned prompt and embeds the template" {
     required in [
       "verified", "inferred", "gap", "exact set parity", "fewest useful search/tool loops",
       "quote-in-line-slice", "full-deck browser render", "SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception",
-      "three or more directly comparable aggregate",
+      "three or more directly comparable aggregate", "static and offline", "URL-bearing",
     ] {
     assert_true(
       contract.contains(required),

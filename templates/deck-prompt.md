@@ -22,6 +22,8 @@ what its evidence supports, and what still needs human confirmation.
 - Every `verified` or `inferred` row passes literal quote-in-line-slice checking.
 - Furigana, figures, page labels, asset references, and gap disclosures satisfy
   the contracts below.
+- `deck.html` is static and offline: browser parsing can reach only bundled
+  `assets/*.png`, with no executable, embedded, navigating, or imported content.
 - A full-deck browser render has been inspected for clipping, overflow, missing
   assets, tofu, spacing, and visual consistency.
 
@@ -43,6 +45,9 @@ what its evidence supports, and what still needs human confirmation.
   products, ignored data, or mutable runtime output.
 - Each non-gap claim needs evidence that supports its wording. Absence of evidence
   is not a factual “no”; narrow the claim or route the missing fact to `gaps.md`.
+- Keep browser input inside the inert HTML subset defined below. Network blocking
+  during rendering is defense-in-depth; validator-clean markup is the primary
+  contract.
 - Work autonomously inside the bundle scope. This run is already approved and
   externally sandboxed; approval pauses are unnecessary.
 
@@ -80,7 +85,25 @@ what its evidence supports, and what still needs human confirmation.
 - Put `data-claim="<stable-id>"` on the `.entry`, `.cap`, `<img>`, or smallest
   descendant that owns each factual assertion. Split combined claims when their
   sources or statuses differ. Decorative headings and connective prose need no ID.
-- Every `<img>` uses a relative `assets/<name>` source naming a real bundled file.
+- Static HTML subset: ordinary document/layout/text/ruby elements plus bundled
+  PNG images. Keep executable, conditional, embedded/media, navigation/form,
+  foreign-namespace, document-mutating, and obsolete raw-text elements absent -
+  including `script`, `noscript`, `iframe`, `object`, `embed`, `audio`, `video`,
+  `a`, `form`, `base`, `link`, `svg`, and `math`.
+- Allowed document metadata forms are the HTML doctype, `<html lang="ja">`, and
+  `<meta charset="utf-8">` contract; keep processing instructions, extra
+  declarations, and `meta[http-equiv]` absent.
+- Attribute subset: names beginning with `on` are outside the contract. The sole
+  resource-bearing attribute is `<img src="assets/<name>.png">`, naming one real
+  direct bundled file. Keep `href`, `srcset`, `srcdoc`, `data`, `action`,
+  `formaction`, `poster`, `ping`, `attributionsrc`, and equivalent URL-bearing
+  attributes absent. Write source attribution as visible caption text, not links.
+- CSS subset: local declarations, system fonts, colors, gradients, and generated
+  text. Keep `@import`, URL functions (`url()` / `src()`), URL-string image
+  functions (`image()` / `image-set()` / `-webkit-image-set()`), and escaped
+  identifier spellings absent from live CSS. Write inline `style=` CSS literally,
+  without HTML character references. URL-shaped text is safe only inside a real
+  CSS comment or quoted string.
 
 ### `provenance.json`
 
@@ -150,8 +173,9 @@ and disclose the exact blocker in `gaps.md`. A text-only deck omits both
 1. Re-read every cited final line slice and literal-search its decoded `quote`.
 2. Compare the unique deck `data-claim` IDs with provenance IDs in both
    directions; resolve duplicates and mismatches.
-3. Check slide numbering/footer totals, three-tier order, JA/JPF equality,
-   all-kana `<rt>`, kanji ruby coverage, image paths, and mandatory files.
+3. Check the static/offline HTML/CSS subset, slide numbering/footer totals,
+   three-tier order, JA/JPF equality, all-kana `<rt>`, kanji ruby coverage, image
+   paths, and mandatory files.
 4. Run `figures.py` when present, then render and inspect every slide. Revise the
    bundle until its content and layout meet the success criteria.
 5. Re-scan the whole bundle for secrets, PHI, identifiers, unsafe imagery, and

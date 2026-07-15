@@ -22,6 +22,19 @@ fn deck_with_entry(e : String) -> String {
 }
 
 ///|
+/// A valid one-slide deck with the fragment after its required entry. Security
+/// tests use this to seed markup without perturbing the slide/tier contract.
+fn deck_with_fragment(fragment : String) -> String {
+  envelope(
+    sections=slide_of(
+      eyebrow("01"),
+      entry() + fragment,
+      pageno("project \u{b7} 1 / 1"),
+    ),
+  )
+}
+
+///|
 /// One `.eyebrow` with its `.n` section number.
 fn eyebrow(n : String) -> String {
   "<div class=\"eyebrow\"><span class=\"n\">\{n}</span><span>l</span></div>"
@@ -256,6 +269,133 @@ test "image checks map to their codes" {
   ])
   let present : @set.Set[String] = @set.Set(["assets/x.png"][:])
   json_inspect(validate_deck(missing, "project", present).codes(), content=[])
+  // URL/HTML metacharacters never pass merely because a raw filesystem entry
+  // with the same spelling exists; browser decoding could target another path.
+  let suspicious = [
+    "assets/%2e%2e%2fsecret.png", "assets/a&sol;b.png", "assets/a?b.png", "assets/a#b.png",
+    "assets/a\\b.png",
+  ]
+  let suspicious_files : @set.Set[String] = @set.Set(suspicious[:])
+  for src in suspicious {
+    let deck = envelope(
+      sections=slide_of(
+        eyebrow("01"),
+        entry() + "<img src=\"\{src}\">",
+        pageno("project \u{b7} 1 / 1"),
+      ),
+    )
+    json_inspect(validate_deck(deck, "project", suspicious_files).codes(), content=[
+      "img.not_asset",
+    ])
+  }
+}
+
+///|
+/// Executable, embedded, navigation/submission, and meta HTTP directives block
+/// through one category code. Tag/attribute matching is ASCII-case-insensitive,
+/// and the diagnostic decodes the directive like the browser.
+test "static contract rejects active embedded and navigating markup" {
+  for
+    markup in [
+      "<ScRiPt type=\"application/json\">{}</ScRiPt>", "<IFRAME></IFRAME>", "<a>navigation</a>",
+      "<form></form>", "<svg></svg>", "<!--><SCRIPT></SCRIPT>", "<!---><IFRAME></IFRAME>",
+      "<!foo>", "<?x \"?><SCRIPT></SCRIPT>\">", "<meta name=\"viewport\" content=\"width=device-width\">",
+    ] {
+    json_inspect(
+      validate_deck(deck_with_fragment(markup), "project", no_assets()).codes(),
+      content=["static.active_markup"],
+    )
+  }
+  let refresh = "<meta http-equiv=\"&#114efresh\" content=\"0; https://example.invalid\">"
+  let refresh_report = validate_deck(
+    deck_with_fragment(refresh),
+    "project",
+    no_assets(),
+  )
+  json_inspect(refresh_report.codes(), content=["static.active_markup"])
+  assert_true(refresh_report.render().contains("<meta http-equiv=refresh>"))
+}
+
+///|
+/// Event attributes and every non-image resource attribute block. An event-like
+/// string inside another quoted attribute is inert and cannot hide the later
+/// mixed-case real handler; input[src] proves src is allowed only on img.
+test "static contract rejects event and non-image resource attributes" {
+  let event = "<div title=\"<script onload=x>\" oNcLiCk=\"alert(1)\">x</div>"
+  json_inspect(
+    validate_deck(deck_with_fragment(event), "project", no_assets()).codes(),
+    content=["static.event_handler"],
+  )
+  let resource = "<input type=\"image\" SRC=\"assets/local.png\">"
+  json_inspect(
+    validate_deck(deck_with_fragment(resource), "project", no_assets()).codes(),
+    content=["static.resource"],
+  )
+}
+
+///|
+/// CSS imports and URL-bearing functions block in both style RAWTEXT and an
+/// inline style attribute. The inline spelling uses an HTML numeric reference to
+/// ensure the security pass sees the browser-decoded CSS, not only source text.
+test "static contract rejects CSS imports and entity-obscured URLs" {
+  let imported = envelope(
+    style="<style>@IMPORT \"https://example.invalid/deck.css\";</style>",
+  )
+  json_inspect(validate_deck(imported, "project", no_assets()).codes(), content=[
+    "static.css_resource",
+  ])
+  let inline = "<span style=\"background:u&#114l(https://example.invalid/x.png)\">x</span>"
+  json_inspect(
+    validate_deck(deck_with_fragment(inline), "project", no_assets()).codes(),
+    content=["static.css_resource"],
+  )
+}
+
+///|
+/// HTML comments, quoted attribute values, entity-encoded markup, RCDATA, CSS
+/// comments, and CSS strings are inert parser contexts. Their hostile-looking
+/// text must not trigger the static gate; a normal gradient remains valid CSS.
+test "static contract ignores comment quote entity and raw-text decoys" {
+  let style = "<style>/* @import \"x\"; url(https://x) <script src=x> */\n.x::before{content:\"@import url(https://x) <iframe src=x>\"}\n.x{background:linear-gradient(#fff,#000)}</style>"
+  let decoys = "<!-- <script src=x></script><iframe src=x></iframe> -->" +
+    "<span title=\"<script src=x onload=x> href=https://x\">safe</span>" +
+    "&lt;iframe src=https://x&gt;" +
+    "<textarea><script src=https://x></script></textarea>"
+  let deck = envelope(
+    style~,
+    sections=slide_of(
+      eyebrow("01"),
+      entry() + decoys,
+      pageno("project \u{b7} 1 / 1"),
+    ),
+  )
+  json_inspect(validate_deck(deck, "project", no_assets()).codes(), content=[])
+}
+
+///|
+/// Skipping a real style RAWTEXT body ends exactly at its close tag: an iframe-
+/// shaped CSS string stays inert, while a real iframe after the close is still
+/// discovered and blocked.
+test "static raw-text scan resumes at real closing tag" {
+  let deck = envelope(
+    style="<style>.x::before{content:\"<iframe src=x>\"}</style>",
+    sections=slide_of(
+      eyebrow("01"),
+      entry() + "<IFRAME></IFRAME>",
+      pageno("project \u{b7} 1 / 1"),
+    ),
+  )
+  json_inspect(validate_deck(deck, "project", no_assets()).codes(), content=[
+    "static.active_markup",
+  ])
+  // HTML RAWTEXT closes even when `</style>` looks quoted to CSS; the following
+  // script is therefore real markup and must remain visible to the static scan.
+  let quoted_close = envelope(
+    style="<style>.x::before{content:\"</style><SCRIPT></SCRIPT>\"}",
+  )
+  json_inspect(validate_deck(quoted_close, "project", no_assets()).codes(), content=[
+    "static.active_markup",
+  ])
 }
 
 ///|

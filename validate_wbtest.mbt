@@ -24,6 +24,19 @@ test "get_attr value forms" {
 }
 
 ///|
+/// The all-attribute scan preserves duplicates, ASCII-folds their names, and
+/// retains authored values. Security checks consume this surface instead of the
+/// first-value accessor so a later dangerous duplicate remains visible.
+test "scan_attrs preserves duplicate attributes" {
+  let region = " OnLoad='first' ONLOAD=second data-x=3 ".to_array()
+  let attrs = scan_attrs(region, 0, region.length())
+  assert_eq(attrs.length(), 3)
+  inspect("\{attrs[0].name}=\{attrs[0].value}", content="onload=first")
+  inspect("\{attrs[1].name}=\{attrs[1].value}", content="onload=second")
+  inspect("\{attrs[2].name}=\{attrs[2].value}", content="data-x=3")
+}
+
+///|
 /// `has_class` matches a whole whitespace-delimited class token, never a
 /// substring of one — so `col-fig tall` has `tall` and `col-fig` but not `col`.
 test "has_class whole-token match" {
@@ -46,6 +59,8 @@ test "clean_doc handles comments raw text and quoted decoys in one pass" {
   inspect(range_to_string(b, 0, b.length()), content="keep")
   let c = clean_doc("<!--only-->".to_array())
   inspect(range_to_string(c, 0, c.length()), content="")
+  let abrupt = clean_doc("a<!-->b<!--->c".to_array())
+  inspect(range_to_string(abrupt, 0, abrupt.length()), content="abc")
   let style = clean_doc("<style><img src=x></style>keep".to_array())
   inspect(
     range_to_string(style, 0, style.length()),
@@ -68,6 +83,45 @@ test "clean_doc handles comments raw text and quoted decoys in one pass" {
   inspect(
     range_to_string(quoted, 0, quoted.length()),
     content="<div data-a='<!--' data-b=\"<style>\"></div><span>kept</span>",
+  )
+}
+
+///|
+/// The CSS subset scanner finds case-insensitive imports, current URL functions,
+/// image functions whose strings denote URLs, identifier escapes, and HTML-
+/// entity-obscured inline CSS. Real comments/strings and longer identifiers are
+/// inert, so hostile-looking prose and ordinary gradients remain usable.
+test "css resource scanner distinguishes live tokens from decoys" {
+  assert_true(css_has_resource("@IMPORT \"x.css\";", false))
+  assert_true(css_has_resource("a{background:URL(x.png)}", false))
+  assert_true(css_has_resource("a{background:src('x.png')}", false))
+  assert_true(css_has_resource("a{background:image('x.png')}", false))
+  assert_true(css_has_resource("a{background:image-set('x.png' 1x)}", false))
+  assert_true(
+    css_has_resource("a{background:-webkit-image-set('x.png' 1x)}", false),
+  )
+  assert_true(css_has_resource("a{background:u\\72l(x.png)}", false))
+  assert_true(css_has_resource("a{background:u&#114;l(x.png)}", true))
+  assert_true(css_has_resource("a{background:u&#114l(x.png)}", true))
+  assert_true(css_has_resource("a{background:u&bsol;72l(x.png)}", true))
+  assert_true(css_has_resource("&commat;import 'x.css';", true))
+  assert_true(
+    css_has_resource("/* decoy &ast;&sol;a{background:url(x.png)}", true),
+  )
+  assert_true(
+    css_has_resource("a{content:&quot;x&NewLine;background:url(x.png)}", true),
+  )
+  assert_true(css_has_resource("content:'A &unknown; B'", true))
+  assert_false(
+    css_has_resource(
+      "/* @import 'x'; url(x) */a::before{content:\"@import url(x)\"}", false,
+    ),
+  )
+  assert_false(
+    css_has_resource(
+      "a{background:linear-gradient(#fff,#000);--url-token:1}noturl(x){}@important{}",
+      false,
+    ),
   )
 }
 

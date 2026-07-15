@@ -270,7 +270,10 @@ fn clean_doc(doc : Array[Char]) -> Array[Char] {
   let mut i = 0
   while i < n {
     if ci_matches_at(doc, i, comment_open) {
-      let mut close = i + comment_open.length()
+      // The shortest valid empty comment is `<!--->`: its `-->` overlaps the
+      // opener's final hyphen, so closing-tag search begins two codepoints into
+      // the opener rather than only after it.
+      let mut close = i + 2
       while close < n && !ci_matches_at(doc, close, comment_close) {
         close = close + 1
       }
@@ -362,11 +365,22 @@ fn scan_open_tag(doc : Array[Char], lt : Int) -> (String, Int, Int, Int) {
 }
 
 ///|
-/// Read attribute `name` (matched case-insensitively) from the attribute region
-/// `doc[lo:hi]`. Returns the value for `name="v"`, `name='v'`, or `name=v`; an
-/// empty string for a boolean attribute (`name` with no `=`); and `None` when
-/// `name` is absent. The first occurrence wins.
-fn get_attr(doc : Array[Char], lo : Int, hi : Int, name : String) -> String? {
+/// One parsed attribute. `name` is ASCII-lowercased (HTML attribute names are
+/// case-insensitive); `value` is the authored value before character-reference
+/// decoding. Boolean attributes carry an empty value.
+priv struct Attr {
+  name : String
+  value : String
+}
+
+///|
+/// Parse every attribute in `doc[lo:hi]`, preserving duplicate attributes so a
+/// security scan cannot hide an event/resource attribute behind an earlier
+/// duplicate. Double-, single-, and unquoted values are supported; malformed
+/// unterminated values consume the remaining region, matching the browser's
+/// fail-closed shape closely enough that later text cannot become a new tag.
+fn scan_attrs(doc : Array[Char], lo : Int, hi : Int) -> Array[Attr] {
+  let out : Array[Attr] = []
   let mut i = lo
   while i < hi {
     while i < hi && !is_attr_name_char(doc[i]) {
@@ -379,7 +393,11 @@ fn get_attr(doc : Array[Char], lo : Int, hi : Int, name : String) -> String? {
     while i < hi && is_attr_name_char(doc[i]) {
       i = i + 1
     }
-    let attr_name = range_to_string(doc, ns, i)
+    let name_out = StringBuilder::new()
+    for k in ns..<i {
+      name_out.write_char(lower_ascii(doc[k]))
+    }
+    let attr_name = name_out.to_string()
     while i < hi && is_space(doc[i]) {
       i = i + 1
     }
@@ -408,8 +426,22 @@ fn get_attr(doc : Array[Char], lo : Int, hi : Int, name : String) -> String? {
         value = range_to_string(doc, vs, i)
       }
     }
-    if ci_eq(attr_name, name) {
-      return Some(value)
+    out.push(Attr::{ name: attr_name, value })
+  }
+  out
+}
+
+///|
+/// Read attribute `name` (matched case-insensitively) from the attribute region
+/// `doc[lo:hi]`. Returns the value for `name="v"`, `name='v'`, or `name=v`; an
+/// empty string for a boolean attribute (`name` with no `=`); and `None` when
+/// `name` is absent. The first occurrence wins, matching HTML duplicate-
+/// attribute parsing; `scan_attrs` remains available to security checks that
+/// must inspect every authored duplicate.
+fn get_attr(doc : Array[Char], lo : Int, hi : Int, name : String) -> String? {
+  for attr in scan_attrs(doc, lo, hi) {
+    if ci_eq(attr.name, name) {
+      return Some(attr.value)
     }
   }
   None
@@ -800,11 +832,14 @@ fn trim_ws(s : String) -> String {
 
 ///|
 /// The character an HTML named reference denotes, for the small set the deck
-/// uses (`&amp; &lt; &gt; &quot; &apos; &nbsp; &middot;`), or `None` for any
-/// other name. Only these lowercase, semicolon-terminated forms are recognized —
-/// a deliberate subset of HTML5's named references, not the full table.
+/// uses plus ASCII punctuation that could otherwise disguise a URL/CSS token,
+/// or `None` for any other name. These semicolon-terminated forms are a
+/// deliberate subset of HTML5's named references, not the full table; `Tab` and
+/// `NewLine` retain their standard case-sensitive spellings.
 fn named_entity(name : String) -> Char? {
   match name {
+    "NewLine" => Some('\n')
+    "Tab" => Some('\t')
     "amp" => Some('&')
     "lt" => Some('<')
     "gt" => Some('>')
@@ -812,6 +847,15 @@ fn named_entity(name : String) -> Char? {
     "apos" => Some('\'')
     "nbsp" => Some('\u{a0}')
     "middot" => Some('\u{b7}')
+    "ast" => Some('*')
+    "bsol" => Some('\\')
+    "colon" => Some(':')
+    "commat" => Some('@')
+    "lpar" => Some('(')
+    "period" => Some('.')
+    "rpar" => Some(')')
+    "semi" => Some(';')
+    "sol" => Some('/')
     _ => None
   }
 }
@@ -920,6 +964,85 @@ fn decode_entities(s : String) -> String {
 }
 
 ///|
+/// Parse a numeric character reference in an HTML attribute, where the trailing
+/// semicolon is optional under browser error recovery. The strict text decoder
+/// intentionally retains malformed references; the browser-boundary scan needs
+/// the recovered value so spellings such as `u&#114l(` cannot disguise `url(`.
+fn parse_attr_numeric_entity(
+  cs : Array[Char],
+  i : Int,
+  n : Int,
+) -> (Char, Int)? {
+  if i + 2 >= n || cs[i] != '&' || cs[i + 1] != '#' {
+    return None
+  }
+  let mut j = i + 2
+  let base = if j < n && (cs[j] == 'x' || cs[j] == 'X') {
+    j = j + 1
+    16
+  } else {
+    10
+  }
+  let start = j
+  let mut code = 0
+  while j < n {
+    match hex_val(cs[j], base) {
+      Some(digit) => {
+        code = code * base + digit
+        if code > 0x10FFFF {
+          return None
+        }
+        j = j + 1
+      }
+      None => break
+    }
+  }
+  if j == start {
+    return None
+  }
+  let past = if j < n && cs[j] == ';' { j + 1 } else { j }
+  match code.to_char() {
+    Some(ch) => Some((ch, past))
+    None => None
+  }
+}
+
+///|
+/// Decode character references as consumed from an HTML attribute. Named
+/// references retain the validator's semicolon-terminated subset; numeric
+/// decimal/hex references additionally follow the browser's missing-semicolon
+/// recovery. Used only for security-sensitive attribute values, leaving the
+/// existing visible-text normalization contract unchanged.
+fn decode_attr_entities(s : String) -> String {
+  let cs = s.to_array()
+  let n = cs.length()
+  let sb = StringBuilder::new()
+  let mut i = 0
+  while i < n {
+    if cs[i] == '&' {
+      let parsed = match parse_attr_numeric_entity(cs, i, n) {
+        Some(hit) => Some(hit)
+        None => parse_entity(cs, i, n)
+      }
+      match parsed {
+        Some((ch, next)) => {
+          sb.write_char(ch)
+          i = next
+        }
+        None => {
+          sb.write_char(cs[i])
+          i = i + 1
+        }
+      }
+    } else {
+      sb.write_char(cs[i])
+      i = i + 1
+    }
+  }
+  sb.to_string()
+}
+
+///|
 /// The text content of the element body `doc[lo:hi]`: drop every tag (quote-aware
 /// via `skip_tag`), decode character references, and trim surrounding ASCII
 /// whitespace. Reads an `.eyebrow .n` and a `.pageno` for the slide-text checks.
@@ -935,6 +1058,410 @@ fn inner_text(doc : Array[Char], lo : Int, hi : Int) -> String {
     }
   }
   trim_ws(decode_entities(sb.to_string()))
+}
+
+// -- Static/offline browser boundary ----------------------------------------
+
+///|
+/// Return the index after a canonical `-->` for the HTML comment beginning at
+/// `i`. A malformed/unterminated opener advances only past `<!--`, making the
+/// remainder visible to the fail-closed security scan: browsers abruptly close
+/// some malformed comments (for example `<!-->`), while treating others as
+/// comments, and scanning the ambiguous remainder can only over-reject. Callers
+/// first establish a real opener outside a tag; quoted comment-shaped attribute
+/// values remain inside the atomically skipped host tag.
+fn skip_html_comment(doc : Array[Char], i : Int, end : Int) -> Int {
+  let close = ['-', '-', '>']
+  let mut j = i + 2
+  while j < end && !ci_matches_at(doc, j, close) {
+    j = j + 1
+  }
+  if j < end {
+    j + close.length()
+  } else if i + 4 < end {
+    i + 4
+  } else {
+    end
+  }
+}
+
+///|
+/// Whether `i` begins a real `<!doctype html...>` declaration at an HTML-space
+/// or `>` boundary. The frame check and static scanner share this recognition:
+/// the doctype is the sole allowed declaration/processing-instruction shape.
+fn is_html_doctype_at(doc : Array[Char], i : Int, end : Int) -> Bool {
+  let needle = "<!doctype html".to_array()
+  if !ci_matches_at(doc, i, needle) {
+    return false
+  }
+  let after = i + needle.length()
+  after >= end || is_space(doc[after]) || doc[after] == '>'
+}
+
+///|
+/// Elements outside the inert, self-contained slide surface. The list covers
+/// executable/conditional markup, nested browsing or plugin/media content,
+/// navigation/submission, document URL/style mutation, foreign embedded
+/// namespaces, and obsolete raw-text containers that alter parser context.
+fn is_unsafe_static_tag(tag : String) -> Bool {
+  match tag {
+    "a"
+    | "applet"
+    | "area"
+    | "audio"
+    | "base"
+    | "embed"
+    | "fencedframe"
+    | "foreignobject"
+    | "form"
+    | "frame"
+    | "frameset"
+    | "iframe"
+    | "isindex"
+    | "link"
+    | "marquee"
+    | "math"
+    | "noembed"
+    | "noframes"
+    | "noscript"
+    | "object"
+    | "picture"
+    | "plaintext"
+    | "portal"
+    | "script"
+    | "source"
+    | "svg"
+    | "track"
+    | "video"
+    | "xmp" => true
+    _ => false
+  }
+}
+
+///|
+/// Tags whose bodies HTML parses as RAWTEXT/RCDATA rather than ordinary child
+/// markup. Security discovery checks the real opening tag and its attributes,
+/// then skips the body to its browser-recognized end tag so `<script>`/`href=`
+/// text inside CSS, title text, or a rejected container is never a decoy finding.
+fn is_raw_text_container(tag : String) -> Bool {
+  match tag {
+    "iframe"
+    | "noembed"
+    | "noframes"
+    | "noscript"
+    | "script"
+    | "style"
+    | "textarea"
+    | "title"
+    | "xmp" => true
+    _ => false
+  }
+}
+
+///|
+/// HTML attributes whose values can identify, fetch, navigate to, submit to, or
+/// embed a resource in current/legacy Chromium parsing surfaces. `img src` is
+/// the sole exception and is delegated to `check_imgs`, which already requires
+/// one direct, present `assets/*.png` file without producing duplicate findings.
+fn is_resource_attr(name : String) -> Bool {
+  match name {
+    "action"
+    | "archive"
+    | "attributionsrc"
+    | "background"
+    | "cite"
+    | "classid"
+    | "code"
+    | "codebase"
+    | "data"
+    | "dynsrc"
+    | "formaction"
+    | "href"
+    | "imagesrcset"
+    | "longdesc"
+    | "lowsrc"
+    | "manifest"
+    | "ping"
+    | "poster"
+    | "profile"
+    | "src"
+    | "srcdoc"
+    | "srcset"
+    | "usemap"
+    | "xlink:href" => true
+    _ => false
+  }
+}
+
+///|
+/// CSS identifier continuation relevant to boundary-checking URL-bearing
+/// function names. A reverse solidus is included because it can escape an
+/// identifier codepoint; the main scan rejects any such escape outside a
+/// comment/string rather than trying to maintain a partial CSS decoder.
+fn is_css_name_char(c : Char) -> Bool {
+  let o = c.to_int()
+  is_ascii_letter(c) ||
+  is_ascii_digit(c) ||
+  c == '-' ||
+  c == '_' ||
+  c == '\\' ||
+  o >= 0x80
+}
+
+///|
+/// Skip a CSS `/* ... */` comment beginning at `i`, or consume to EOF when it
+/// never closes. CSS comments produce no tokens, so resource-shaped text inside
+/// one is inert.
+fn skip_css_comment(css : Array[Char], i : Int, end : Int) -> Int {
+  let mut j = i + 2
+  while j + 1 < end {
+    if css[j] == '*' && css[j + 1] == '/' {
+      return j + 2
+    }
+    j = j + 1
+  }
+  end
+}
+
+///|
+/// Skip a quoted CSS string. Backslash escapes keep the next codepoint inside
+/// the string; an unescaped newline ends a bad string token so scanning resumes
+/// there. URL-shaped prose in `content:` remains inert, while later declarations
+/// after a malformed newline still receive scrutiny.
+fn skip_css_string(css : Array[Char], i : Int, end : Int) -> Int {
+  let quote = css[i]
+  let mut j = i + 1
+  while j < end {
+    if css[j] == quote {
+      return j + 1
+    }
+    if css[j] == '\\' {
+      j = if j + 1 < end { j + 2 } else { end }
+    } else if css[j] == '\n' || css[j] == '\r' || css[j] == '\u{0c}' {
+      return j
+    } else {
+      j = j + 1
+    }
+  }
+  end
+}
+
+///|
+/// Skip CSS whitespace and comments between an identifier and `(`. CSS's exact
+/// tokenizer is stricter for some separated forms; accepting extra trivia here
+/// is intentionally conservative for an offline contract.
+fn skip_css_trivia(css : Array[Char], from : Int, end : Int) -> Int {
+  let mut i = from
+  let mut again = true
+  while again {
+    again = false
+    while i < end && is_space(css[i]) {
+      i = i + 1
+    }
+    if i + 1 < end && css[i] == '/' && css[i + 1] == '*' {
+      i = skip_css_comment(css, i, end)
+      again = true
+    }
+  }
+  i
+}
+
+///|
+/// Whether URL-bearing CSS function `name` begins at `i` as a whole ASCII-case-
+/// insensitive identifier and is followed (allowing conservative trivia) by
+/// `(`. A substring inside a longer identifier such as `noturl` never matches.
+fn css_function_at(
+  css : Array[Char],
+  i : Int,
+  end : Int,
+  name : String,
+) -> Bool {
+  let needle = name.to_array()
+  if !ci_matches_at(css, i, needle) || (i > 0 && is_css_name_char(css[i - 1])) {
+    return false
+  }
+  let after = i + needle.length()
+  if after < end && is_css_name_char(css[after]) {
+    return false
+  }
+  let call = skip_css_trivia(css, after, end)
+  call < end && css[call] == '('
+}
+
+///|
+/// Whether authored CSS can identify an external/local resource. HTML character
+/// references are decoded only for `style=` attributes; `<style>` is RAWTEXT and
+/// therefore passes literal text. Real comments and strings are skipped. The
+/// scan rejects `@import`, CSS URL functions (`url`/`src`), image functions that
+/// accept bare URL strings, and any escape outside a string/comment (an escape
+/// can disguise those identifiers). This deliberately small fail-closed scanner
+/// implements the deck's no-resource CSS subset, not a general CSS parser.
+fn css_has_resource(css : String, decode_html_entities : Bool) -> Bool {
+  let source = if decode_html_entities {
+    decode_attr_entities(css)
+  } else {
+    css
+  }
+  let cs = source.to_array()
+  let n = cs.length()
+  if decode_html_entities {
+    // A residual/literal ampersand could be an unsupported named HTML reference
+    // whose browser-decoded punctuation changes CSS string/comment context.
+    // Inline styles need no ampersand grammar, so fail closed instead of carrying
+    // a partial 2,000+-name entity table.
+    for c in cs {
+      if c == '&' {
+        return true
+      }
+    }
+  }
+  let import_name = "import".to_array()
+  let resource_functions = [
+    "url", "src", "image", "image-set", "-webkit-image-set",
+  ]
+  let mut i = 0
+  while i < n {
+    if i + 1 < n && cs[i] == '/' && cs[i + 1] == '*' {
+      i = skip_css_comment(cs, i, n)
+    } else if cs[i] == '"' || cs[i] == '\'' {
+      i = skip_css_string(cs, i, n)
+    } else if cs[i] == '\\' {
+      return true
+    } else if cs[i] == '@' && ci_matches_at(cs, i + 1, import_name) {
+      let after = i + 1 + import_name.length()
+      if after >= n || !is_css_name_char(cs[after]) {
+        return true
+      }
+      i = i + 1
+    } else {
+      for name in resource_functions {
+        if css_function_at(cs, i, n, name) {
+          return true
+        }
+      }
+      i = i + 1
+    }
+  }
+  false
+}
+
+///|
+/// Enforce the browser-input boundary on the original HTML before `clean_doc`
+/// blanks CSS/script bodies. One context-aware pass ignores HTML comments and
+/// quoted tag literals; inspects every real tag + duplicate attribute; scans
+/// real `<style>` RAWTEXT and `style=` CSS; and skips all RAWTEXT/RCDATA bodies.
+/// Each category reports at most its first issue, keeping one malformed deck
+/// concise while preserving four stable blocking codes.
+fn check_static_contract(html : Array[Char], out : Report) -> Unit {
+  let n = html.length()
+  let comment_open = ['<', '!', '-', '-']
+  let mut active : String? = None
+  let mut event : String? = None
+  let mut resource : String? = None
+  let mut css_resource : String? = None
+  let mut i = 0
+  while i < n {
+    if ci_matches_at(html, i, comment_open) {
+      i = skip_html_comment(html, i, n)
+    } else if is_open_tag_start(html, i, n) {
+      let (tag, lo, hi, past_gt) = scan_open_tag(html, i)
+      if active is None && is_unsafe_static_tag(tag) {
+        active = Some("<\{tag}>")
+      }
+      let attrs = scan_attrs(html, lo, hi)
+      for attr in attrs {
+        if event is None && attr.name.has_prefix("on") {
+          event = Some("\{tag}[\{attr.name}]")
+        }
+        if resource is None &&
+          is_resource_attr(attr.name) &&
+          !(tag == "img" && attr.name == "src") {
+          resource = Some("\{tag}[\{attr.name}]")
+        }
+        if css_resource is None &&
+          attr.name == "style" &&
+          css_has_resource(attr.value, true) {
+          css_resource = Some("\{tag}[style]")
+        }
+        if active is None && tag == "meta" && attr.name == "http-equiv" {
+          let directive = trim_ws(decode_attr_entities(attr.value))
+          active = Some("<meta http-equiv=\{directive}>")
+        }
+      }
+      if active is None && tag == "meta" {
+        let charset_only = attrs.length() == 1 &&
+          attrs[0].name == "charset" &&
+          ci_eq(trim_ws(decode_attr_entities(attrs[0].value)), "utf-8")
+        if !charset_only {
+          active = Some("<meta>")
+        }
+      }
+      if tag == "plaintext" {
+        i = n
+      } else if is_raw_text_container(tag) {
+        let close = find_raw_close_tag(html, tag, past_gt)
+        let body_hi = if close >= 0 { close } else { n }
+        if tag == "style" &&
+          css_resource is None &&
+          css_has_resource(range_to_string(html, past_gt, body_hi), false) {
+          css_resource = Some("<style>")
+        }
+        i = if close >= 0 { skip_tag(html, close, n) } else { n }
+      } else {
+        i = past_gt
+      }
+    } else if is_markup_start(html, i, n) {
+      if active is None &&
+        i + 1 < n &&
+        (html[i + 1] == '!' || html[i + 1] == '?') &&
+        !is_html_doctype_at(html, i, n) {
+        active = Some("<declaration-or-processing-instruction>")
+      }
+      i = skip_tag(html, i, n)
+    } else {
+      i = i + 1
+    }
+  }
+  match active {
+    Some(location) =>
+      out.findings.push(
+        must(
+          "static.active_markup",
+          "active, embedded, or navigating markup is not allowed: \{location}",
+        ),
+      )
+    None => ()
+  }
+  match event {
+    Some(location) =>
+      out.findings.push(
+        must(
+          "static.event_handler",
+          "event-handler attributes are not allowed: \{location}",
+        ),
+      )
+    None => ()
+  }
+  match resource {
+    Some(location) =>
+      out.findings.push(
+        must(
+          "static.resource",
+          "only <img src=\"assets/*.png\"> may carry a resource attribute: \{location}",
+        ),
+      )
+    None => ()
+  }
+  match css_resource {
+    Some(location) =>
+      out.findings.push(
+        must(
+          "static.css_resource",
+          "CSS imports, URL-bearing functions, token escapes, and ambiguous entities are not allowed: \{location}",
+        ),
+      )
+    None => ()
+  }
 }
 
 // -- Slide model -------------------------------------------------------------
@@ -1039,16 +1566,12 @@ fn scan_deck(doc : Array[Char]) -> Array[Slide] {
 /// Markup is stepped atomically, so a doctype-shaped string inside an attribute
 /// cannot satisfy the envelope check.
 fn has_html_doctype(doc : Array[Char]) -> Bool {
-  let needle = "<!doctype html".to_array()
   let n = doc.length()
   let mut i = 0
   while i < n {
     if i + 1 < n && doc[i] == '<' && doc[i + 1] == '!' {
-      if ci_matches_at(doc, i, needle) {
-        let after = i + needle.length()
-        if after >= n || is_space(doc[after]) || doc[after] == '>' {
-          return true
-        }
+      if is_html_doctype_at(doc, i, n) {
+        return true
       }
       i = skip_tag(doc, i, n)
     } else if is_markup_start(doc, i, n) {
@@ -1447,7 +1970,28 @@ fn check_entry(e : Entry, out : Report) -> Unit {
 }
 
 ///|
-/// Image checks: every `<img>` must have a `src` under `assets/`
+/// Whether `src` is one literal direct bundled PNG URL. The filename follows the
+/// CLI's representable-name policy and excludes URL/parser metacharacters that
+/// could be decoded into a query, fragment, path separator, or HTML reference;
+/// thus the filesystem name checked by `list_assets` is the browser path used.
+fn is_direct_asset_png(src : String) -> Bool {
+  let (parent, name) = split_path(src)
+  if parent != "assets" ||
+    name == "" ||
+    !name.has_suffix(".png") ||
+    !representable(name) {
+    return false
+  }
+  for c in name.to_array() {
+    if c == '%' || c == '&' || c == '?' || c == '#' || c == '\\' {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Image checks: every `<img>` must have one literal direct `assets/*.png` `src`
 /// (`img.not_asset`) that names an asset file present in the bundle
 /// (`img.missing`). `assets` holds `assets/<name>` paths from `list_assets`.
 fn check_imgs(
@@ -1459,9 +2003,8 @@ fn check_imgs(
     let (_, lo, hi, _) = scan_open_tag(doc, lt)
     match get_attr(doc, lo, hi, "src") {
       None => out.findings.push(must("img.not_asset", "<img> without src"))
-      Some(src) => {
-        let (parent, name) = split_path(src)
-        if parent != "assets" || name == "" || !name.has_suffix(".png") {
+      Some(src) =>
+        if !is_direct_asset_png(src) {
           out.findings.push(
             must(
               "img.not_asset",
@@ -1473,7 +2016,6 @@ fn check_imgs(
             must("img.missing", "<img src=\"\{src}\"> has no matching asset"),
           )
         }
-      }
     }
   }
 }
@@ -1481,19 +2023,21 @@ fn check_imgs(
 // -- Public API --------------------------------------------------------------
 
 ///|
-/// Validate a deck's HTML against the envelope, slide-structure, slide-text,
-/// entry/furigana, and image contract, returning a structured `Report`. `slug`
-/// is the project name the per-slide `.pageno` check expects. `assets` holds the
-/// bundle's
-/// `assets/<name>` files. Comments and raw-text content are stripped once before
-/// any scan.
+/// Validate a deck's HTML against the static/offline browser boundary, envelope,
+/// slide-structure, slide-text, entry/furigana, and image contract, returning a
+/// structured `Report`. `slug` is the project name the per-slide `.pageno` check
+/// expects. `assets` holds the bundle's `assets/<name>` files. The security pass
+/// reads original parser contexts; ordinary structural scans share one cleaned
+/// document with comments and raw-text content removed.
 pub fn validate_deck(
   html : String,
   slug : String,
   assets : @set.Set[String],
 ) -> Report {
-  let doc = clean_doc(html.to_array())
+  let raw = html.to_array()
+  let doc = clean_doc(raw)
   let out = Report::{ findings: [] }
+  check_static_contract(raw, out)
   check_frame(doc, out)
   let slides = scan_deck(doc)
   if slides.length() == 0 {

@@ -27,7 +27,7 @@ build:
 
 # Run MoonBit + Python suites; SLIDE_GEN_LIVE=1 opts into Codex.
 test: build
-    SLIDE_GEN_BIN="$(realpath "$(find _build/{{target}} -name main.exe -path '*cmd/main*' -print -quit)")" moon test --target {{target}}
+    SLIDE_GEN_BIN="$(realpath "$(/usr/bin/find _build/{{target}} -name main.exe -path '*cmd/main*' -print -quit)")" moon test --target {{target}}
     uv run --locked --no-dev python -m unittest discover -s tools -p '*_test.py'
 
 # Full gate sweep: format, check, build, test.
@@ -41,7 +41,7 @@ render-probe: build
 
 # Render both committed decks twice through the CLI and prove byte stability.
 live-render: build
-    SLIDE_GEN_BIN="$(realpath "$(find _build/{{target}} -name main.exe -path '*cmd/main*' -print -quit)")" SLIDE_GEN_RENDER_CLI_LIVE=1 moon test --target {{target}} -f '*render CLI repeats both committed six-page decks byte identically*'
+    SLIDE_GEN_BIN="$(realpath "$(/usr/bin/find _build/{{target}} -name main.exe -path '*cmd/main*' -print -quit)")" SLIDE_GEN_RENDER_CLI_LIVE=1 moon test --target {{target}} -f '*render CLI repeats both committed six-page decks byte identically*'
 
 # Run the CLI; pass program args after `--` (e.g. `just run -- --help`).
 run *args:

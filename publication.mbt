@@ -12,6 +12,17 @@ priv struct PublicationPaths {
 }
 
 ///|
+/// Result of acquiring the shared per-project generation/render lease. The
+/// open file owns the advisory lock until callers unlock and close it; a busy
+/// key is distinct from filesystem/setup failure so CLI render diagnostics stay
+/// stable and actionable.
+priv enum ProjectOperationLock {
+  ProjectOperationLocked(@fs.File)
+  ProjectOperationBusy
+  ProjectOperationLockFailed(String)
+}
+
+///|
 /// Remove one filesystem entry without recursively traversing a symlink at its
 /// root. A real directory is removed recursively; files, symlinks, and other
 /// non-directory entries are unlinked. A missing entry is already clean.
@@ -31,18 +42,91 @@ async fn remove_entry_no_follow(path : String) -> Unit {
 ///|
 /// Ensure `path` is an existing real directory without treating an already
 /// present directory as an error (async fs `mkdir(recursive=true)` still reports
-/// EEXIST for the exact leaf on this toolchain). A non-directory entry fails
-/// closed through `mkdir`; it is never removed or followed here.
+/// EEXIST for the exact leaf on this toolchain). If another operation wins a
+/// missing-directory creation race, a no-follow recheck accepts only its real
+/// directory. A non-directory entry fails closed; it is never removed/followed.
 async fn ensure_real_dir(path : String) -> Unit {
-  let kind = try @fs.kind(path, follow_symlink=false) catch {
+  if !is_real_directory_no_follow(path) {
+    try @fs.mkdir(path, recursive=true) catch {
+      error => if !is_real_directory_no_follow(path) { raise error }
+    } noraise {
+      _ => ()
+    }
+  }
+}
+
+///|
+/// Acquire one non-blocking exclusive lease shared by generation and rendering
+/// for `project`. Lock files persist under ignored `renders/.locks`; the open
+/// descriptor, not file presence, owns the lease, so crashes release it. Every
+/// generation/render entry participates, preventing an older render from
+/// publishing after a newer deck invalidated it. No-follow path checks reject
+/// forged lock leaves; the opened descriptor must independently identify as a
+/// regular file.
+async fn acquire_project_operation_lock(
+  root : String,
+  project : String,
+) -> ProjectOperationLock {
+  guard root.has_prefix("/") && valid_render_project(project) else {
+    return ProjectOperationLockFailed(
+      "project lock requires an absolute root and a representable non-dot direct-child name",
+    )
+  }
+  let render_root = join_path(root, "renders")
+  let locks_dir = join_path(render_root, ".locks")
+  let lock_path = join_path(locks_dir, "\{project}.lock")
+  let setup_error : String? = try {
+    ensure_real_dir(render_root)
+    ensure_real_dir(locks_dir)
+    None
+  } catch {
+    error => Some("could not establish lock directory: \{error}")
+  } noraise {
+    result => result
+  }
+  match setup_error {
+    Some(error) => return ProjectOperationLockFailed(error)
+    None => ()
+  }
+  let leaf_kind = try Some(@fs.kind(lock_path, follow_symlink=false)) catch {
     _ => None
   } noraise {
-    kind => Some(kind)
+    result => result
   }
-  match kind {
-    Some(@fs.Directory) => ()
-    _ => @fs.mkdir(path, recursive=true)
+  match leaf_kind {
+    None | Some(@fs.Regular) => ()
+    Some(_) =>
+      return ProjectOperationLockFailed("lock leaf is not a regular file")
   }
+  let file = try
+    @fs.open(
+      lock_path,
+      mode=ReadWrite,
+      create_mode=OpenOrCreate,
+      permission=0o600,
+    )
+  catch {
+    error => return ProjectOperationLockFailed("could not open lock: \{error}")
+  } noraise {
+    file => file
+  }
+  if file.kind() != @fs.Regular {
+    file.close()
+    return ProjectOperationLockFailed("opened lock is not a regular file")
+  }
+  let acquired = try file.try_lock(Exclusive) catch {
+    error => {
+      file.close()
+      return ProjectOperationLockFailed("could not acquire lock: \{error}")
+    }
+  } noraise {
+    result => result
+  }
+  if !acquired {
+    file.close()
+    return ProjectOperationBusy
+  }
+  ProjectOperationLocked(file)
 }
 
 ///|

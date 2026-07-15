@@ -23,8 +23,9 @@ pub let default_render_timeout_secs : Int = 120
 /// Pure path plan for one named render. `bundle_dir` is committed input;
 /// everything else is derived, ignored output. Browser-only scratch lives
 /// inside the reserved stage and is removed before the closed layout publishes.
-/// The opaque public type supports pure argv/path contracts while keeping its
-/// fields package-owned by the production orchestrator.
+/// Chromium reads only the validated stage-local snapshot, never the mutable
+/// source bundle path. The opaque public type supports pure argv/path contracts
+/// while keeping its fields package-owned by the production orchestrator.
 pub struct RenderPlan {
   project : String
   root : String
@@ -33,6 +34,9 @@ pub struct RenderPlan {
   stage_dir : String
   backup_dir : String
   live_dir : String
+  input_dir : String
+  input_deck_path : String
+  input_assets_dir : String
   profile_dir : String
   wrapper_path : String
   pdf_path : String
@@ -120,6 +124,32 @@ priv struct RenderCommandResult {
 }
 
 ///|
+/// One source asset captured in memory before the reserved render stage is
+/// recreated. `path` stays bundle-relative (`assets/<name>.png`); `data` is
+/// written byte-for-byte into the browser-only snapshot.
+priv struct RenderInputAsset {
+  path : String
+  data : Bytes
+}
+
+///|
+/// Exact set equality without depending on hash iteration order.
+fn render_string_sets_equal(
+  left : @set.Set[String],
+  right : @set.Set[String],
+) -> Bool {
+  if left.to_array().length() != right.to_array().length() {
+    return false
+  }
+  for value in left.iter() {
+    if !right.contains(value) {
+      return false
+    }
+  }
+  true
+}
+
+///|
 /// A render target is one representable direct child that cannot overlap the
 /// reserved `.partial`/`.previous` roots: the shared CLI name policy plus no
 /// leading dot. Internal dots, spaces, quotes, and non-ASCII remain valid.
@@ -149,6 +179,7 @@ pub fn plan_render(root : String, project : String) -> RenderPlan? {
   let root = canonical_render_root(root)
   let bundle_dir = join_path(root, "decks/\{project}")
   let stage_dir = join_path(root, "renders/.partial/\{project}")
+  let input_dir = join_path(stage_dir, ".render-input")
   Some(RenderPlan::{
     project,
     root,
@@ -157,6 +188,9 @@ pub fn plan_render(root : String, project : String) -> RenderPlan? {
     stage_dir,
     backup_dir: join_path(root, "renders/.previous/\{project}"),
     live_dir: join_path(root, "renders/\{project}"),
+    input_dir,
+    input_deck_path: join_path(input_dir, "deck.html"),
+    input_assets_dir: join_path(input_dir, "assets"),
     profile_dir: join_path(stage_dir, ".chromium-profile"),
     wrapper_path: join_path(stage_dir, ".page.html"),
     pdf_path: join_path(stage_dir, "deck.pdf"),
@@ -278,7 +312,7 @@ pub fn render_page_wrapper(
     page <= page_count else {
     return None
   }
-  guard file_url(plan.deck_path) is Some(deck_url) else { return None }
+  guard file_url(plan.input_deck_path) is Some(deck_url) else { return None }
   let frame_height = page_count * render_height_px
   let offset = (page - 1) * render_height_px
   let top = if offset == 0 { "0" } else { "-\{offset}" }
@@ -357,7 +391,7 @@ pub fn build_dump_dom_argv(
   browser : String,
   timeout_secs? : Int = default_render_timeout_secs,
 ) -> Array[String]? {
-  guard file_url(plan.deck_path) is Some(deck_url) else { return None }
+  guard file_url(plan.input_deck_path) is Some(deck_url) else { return None }
   let argv = chromium_argv(browser, plan.profile_dir, timeout_secs)
   argv.push("--dump-dom")
   argv.push(deck_url)
@@ -396,6 +430,27 @@ fn render_command_timed_out(code : Int) -> Bool {
 }
 
 ///|
+/// Bound a short tool-resolution probe through the same GNU timeout contract as
+/// browser/PDF work. Resolution shims and fontconfig therefore cannot hang the
+/// CLI before the main Chromium ceiling is reached.
+fn build_render_probe_argv(
+  command : String,
+  args : Array[String],
+  timeout_secs : Int,
+) -> Array[String] {
+  let argv = [
+    "timeout",
+    "--kill-after=30",
+    bounded_render_timeout(timeout_secs).to_string(),
+    command,
+  ]
+  for arg in args {
+    argv.push(arg)
+  }
+  argv
+}
+
+///|
 /// Whether one path's final component is a real regular file. Bundle input and
 /// the resolved browser binary both fail closed on missing/symlink/special
 /// entries.
@@ -431,10 +486,98 @@ async fn run_render_command(argv : Array[String]) -> RenderCommandResult {
 }
 
 ///|
+/// Materialize one immutable-for-this-run browser input under the fresh render
+/// stage. Source files are read through no-follow leaf checks, then the deck and
+/// every safe direct PNG are copied and byte-verified before any external
+/// process starts. Chromium subsequently receives only `input_deck_path`, so a
+/// concurrent source edit/generation cannot replace already-validated input.
+async fn snapshot_render_input(
+  plan : RenderPlan,
+  html : String,
+  assets : @set.Set[String],
+) -> RenderFailure? {
+  let names = assets.to_array()
+  names.sort_by(lex_compare)
+  let copies : Array[RenderInputAsset] = []
+  for path in names {
+    guard read_real_binary_no_follow(join_path(plan.bundle_dir, path))
+      is Some(data) else {
+      return Some(RenderFailure::{
+        code: "render.snapshot.asset",
+        detail: "source asset changed, disappeared, or ceased to be a real regular file: \{path}",
+      })
+    }
+    copies.push(RenderInputAsset::{ path, data })
+  }
+  let write_error : String? = try {
+    recreate_stage(plan.publication())
+    @fs.mkdir(plan.input_dir)
+    @fs.write_file(plan.input_deck_path, html, create_mode=CreateOrTruncate)
+    if copies.length() > 0 {
+      @fs.mkdir(plan.input_assets_dir)
+      for asset in copies {
+        @fs.write_file(
+          join_path(plan.input_dir, asset.path),
+          asset.data,
+          create_mode=CreateOrTruncate,
+        )
+      }
+    }
+    None
+  } catch {
+    error => Some("\{error}")
+  } noraise {
+    result => result
+  }
+  match write_error {
+    Some(error) =>
+      return Some(RenderFailure::{
+        code: "render.snapshot.create",
+        detail: "could not materialize browser input snapshot: \{error}",
+      })
+    None => ()
+  }
+  if !is_real_directory_no_follow(plan.input_dir) ||
+    read_regular_text(plan.input_deck_path) != Some(html) {
+    return Some(RenderFailure::{
+      code: "render.snapshot.verify",
+      detail: "browser input deck snapshot is not the direct file that was written",
+    })
+  }
+  for asset in copies {
+    guard read_real_binary_no_follow(join_path(plan.input_dir, asset.path))
+      is Some(data) &&
+      data == asset.data else {
+      return Some(RenderFailure::{
+        code: "render.snapshot.verify",
+        detail: "browser input asset snapshot differs from its source: \{asset.path}",
+      })
+    }
+  }
+  let copied_assets = list_assets(plan.input_dir)
+  if copied_assets.to_array().length() != copies.length() {
+    return Some(RenderFailure::{
+      code: "render.snapshot.verify",
+      detail: "browser input snapshot asset set is incomplete",
+    })
+  }
+  for asset in copies {
+    if !copied_assets.contains(asset.path) {
+      return Some(RenderFailure::{
+        code: "render.snapshot.verify",
+        detail: "browser input snapshot is missing asset: \{asset.path}",
+      })
+    }
+  }
+  None
+}
+
+///|
 /// Filesystem/validator/tool/DOM preflight with an injected argv runner. Deck
-/// directory and deck.html are lstat-checked and the complete structural/static
-/// validator runs before the first external process. The same cleaned scanner
-/// that drives validation counts source and dumped-DOM section.slide elements.
+/// directory and deck.html are lstat-checked, copied with direct PNG assets into
+/// a fresh stage-local snapshot, and completely validated there before the first
+/// external process. The same cleaned scanner that drives validation counts the
+/// snapshotted source and dumped-DOM section.slide elements.
 async fn preflight_render_with(
   plan : RenderPlan,
   run~ : async (Array[String]) -> RenderCommandResult,
@@ -458,12 +601,22 @@ async fn preflight_render_with(
       "deck.html is empty or unreadable: \{plan.deck_path}",
     )
   }
-  let assets = list_assets(plan.bundle_dir)
-  let report = validate_deck(html, plan.project, assets)
+  let source_assets = list_assets(plan.bundle_dir)
+  match snapshot_render_input(plan, html, source_assets) {
+    Some(failure) => return PreflightFailed(failure)
+    None => ()
+  }
+  guard read_regular_text(plan.input_deck_path) is Some(input_html) else {
+    return render_preflight_failed(
+      "render.snapshot.verify", "browser input deck snapshot became unreadable",
+    )
+  }
+  let input_assets = list_assets(plan.input_dir)
+  let report = validate_deck(input_html, plan.project, input_assets)
   if !report.ok() {
     return render_preflight_failed("render.deck.invalid", report.render())
   }
-  let source_pages = scan_deck(clean_doc(html.to_array())).length()
+  let source_pages = scan_deck(clean_doc(input_html.to_array())).length()
   if source_pages < 1 || source_pages > max_render_pages {
     return render_preflight_failed(
       "render.pages.source",
@@ -471,7 +624,14 @@ async fn preflight_render_with(
     )
   }
 
-  let browser_result = run(["chromiumfish", "path"])
+  let browser_result = run(
+    build_render_probe_argv("chromiumfish", ["path"], timeout_secs),
+  )
+  if render_command_timed_out(browser_result.code) {
+    return render_preflight_failed(
+      "render.browser.timeout", "chromiumfish path exceeded its bounded runtime",
+    )
+  }
   if browser_result.code != 0 {
     return render_preflight_failed(
       "render.browser.resolve",
@@ -485,9 +645,18 @@ async fn preflight_render_with(
     )
   }
 
-  let font_result = run([
-    "fc-match", "--format=%{family}\\n", "Noto Sans CJK JP",
-  ])
+  let font_result = run(
+    build_render_probe_argv(
+      "fc-match",
+      ["--format=%{family}\\n", "Noto Sans CJK JP"],
+      timeout_secs,
+    ),
+  )
+  if render_command_timed_out(font_result.code) {
+    return render_preflight_failed(
+      "render.font.timeout", "fc-match exceeded its bounded runtime",
+    )
+  }
   if font_result.code != 0 {
     return render_preflight_failed(
       "render.font.resolve",
@@ -501,7 +670,6 @@ async fn preflight_render_with(
   }
 
   let profile_error : String? = try {
-    recreate_stage(plan.publication())
     @fs.mkdir(plan.profile_dir)
     None
   } catch {
@@ -545,6 +713,13 @@ async fn preflight_render_with(
       "render.profile.swapped", "isolated Chromium profile ceased to be a real directory",
     )
   }
+  if !is_real_directory_no_follow(plan.input_dir) ||
+    read_regular_text(plan.input_deck_path) != Some(input_html) ||
+    !render_string_sets_equal(list_assets(plan.input_dir), input_assets) {
+    return render_preflight_failed(
+      "render.snapshot.swapped", "browser input snapshot changed during Chromium preflight",
+    )
+  }
   let dom = dom_result.stdout
   if dom.trim().is_empty() {
     return render_preflight_failed(
@@ -581,6 +756,21 @@ pub async fn preflight_render(
       "render.project", "render project must be a non-dot representable direct-child name under an absolute root",
     )
   }
+  let lock_file = match acquire_project_operation_lock(root, project) {
+    ProjectOperationLocked(file) => file
+    ProjectOperationBusy =>
+      return render_preflight_failed(
+        "render.project.busy",
+        "another generate/render operation owns project \{project}",
+      )
+    ProjectOperationLockFailed(error) =>
+      return render_preflight_failed(
+        "render.project.lock",
+        "could not acquire project operation lock: \{error}",
+      )
+  }
+  defer lock_file.close()
+  defer lock_file.unlock()
   preflight_render_with(plan, run=run_render_command, timeout_secs~)
 }
 
@@ -741,11 +931,14 @@ async fn read_real_binary_no_follow(path : String) -> Bytes? {
 
 ///|
 /// Preflight must hand rasterization a fresh stage containing only its isolated
-/// real Chromium profile. This makes a stale screenshot unusable even when a
-/// later browser command exits successfully without writing output.
+/// real Chromium profile plus the real validated input snapshot. This makes a
+/// stale screenshot unusable even when a later browser command exits
+/// successfully without writing output.
 async fn raster_stage_is_fresh(context : RenderContext) -> Bool {
   if !is_real_directory_no_follow(context.plan.stage_dir) ||
-    !is_real_directory_no_follow(context.plan.profile_dir) {
+    !is_real_directory_no_follow(context.plan.profile_dir) ||
+    !is_real_directory_no_follow(context.plan.input_dir) ||
+    !is_real_regular_no_follow(context.plan.input_deck_path) {
     return false
   }
   try
@@ -757,14 +950,19 @@ async fn raster_stage_is_fresh(context : RenderContext) -> Bool {
   catch {
     _ => false
   } noraise {
-    entries => entries.length() == 1 && entries[0] == ".chromium-profile"
+    entries => {
+      let expected = @set.Set([".chromium-profile", ".render-input"][:])
+      entries.length() == 2 &&
+      expected.contains(entries[0]) &&
+      expected.contains(entries[1])
+    }
   }
 }
 
 ///|
-/// Remove wrapper/profile scratch, then re-enumerate and revalidate the exact
-/// page-only stage. Numeric construction, rather than directory order, defines
-/// the returned path order (including page 10+).
+/// Remove wrapper/profile/input scratch, then re-enumerate and revalidate the
+/// exact page-only stage. Numeric construction, rather than directory order,
+/// defines the returned path order (including page 10+).
 async fn finish_raster_stage(context : RenderContext) -> RenderRasterOutcome {
   let plan = context.plan
   if !is_real_directory_no_follow(plan.stage_dir) {
@@ -775,6 +973,7 @@ async fn finish_raster_stage(context : RenderContext) -> RenderRasterOutcome {
   let cleanup_error : String? = try {
     remove_entry_no_follow(plan.wrapper_path)
     remove_entry_no_follow(plan.profile_dir)
+    remove_entry_no_follow(plan.input_dir)
     None
   } catch {
     error => Some("\{error}")
@@ -872,14 +1071,16 @@ async fn capture_render_pages_with(
   }
   if !raster_stage_is_fresh(context) {
     return render_raster_failed(
-      "render.raster.stage_dirty", "render stage must contain only a real isolated Chromium profile",
+      "render.raster.stage_dirty", "render stage must contain only the real input snapshot and isolated Chromium profile",
     )
   }
   for page in 1..<=context.page_count {
     if !is_real_directory_no_follow(context.plan.stage_dir) ||
-      !is_real_directory_no_follow(context.plan.profile_dir) {
+      !is_real_directory_no_follow(context.plan.profile_dir) ||
+      !is_real_directory_no_follow(context.plan.input_dir) ||
+      !is_real_regular_no_follow(context.plan.input_deck_path) {
       return render_raster_failed(
-        "render.raster.stage", "render stage or Chromium profile was swapped",
+        "render.raster.stage", "render stage, input snapshot, or Chromium profile was swapped",
       )
     }
     guard render_page_wrapper(context.plan, page, context.page_count)
@@ -950,9 +1151,11 @@ async fn capture_render_pages_with(
       )
     }
     if !is_real_directory_no_follow(context.plan.stage_dir) ||
-      !is_real_directory_no_follow(context.plan.profile_dir) {
+      !is_real_directory_no_follow(context.plan.profile_dir) ||
+      !is_real_directory_no_follow(context.plan.input_dir) ||
+      !is_real_regular_no_follow(context.plan.input_deck_path) {
       return render_raster_failed(
-        "render.raster.stage", "render stage or Chromium profile was swapped",
+        "render.raster.stage", "render stage, input snapshot, or Chromium profile was swapped",
       )
     }
     if !is_real_regular_no_follow(context.plan.wrapper_path) ||
@@ -981,19 +1184,50 @@ async fn capture_render_pages_with(
 }
 
 ///|
-/// Raster-only entry for focused probing: deterministic deck/tool/DOM preflight
-/// followed by sequential fixed-page Chromium capture. Failure performs no PDF
-/// or publication work.
+/// Lock-held raster core shared by the focused probe and full publication path.
+async fn raster_render_plan_with(
+  plan : RenderPlan,
+  run~ : async (Array[String]) -> RenderCommandResult,
+  timeout_secs : Int,
+) -> RenderRasterOutcome {
+  match preflight_render_with(plan, run~, timeout_secs~) {
+    PreflightFailed(failure) => RasterFailed(failure)
+    PreflightReady(context) =>
+      capture_render_pages_with(context, run~, timeout_secs~)
+  }
+}
+
+///|
+/// Raster-only entry for focused probing: acquire the same project lease as the
+/// full render, then run deterministic deck/tool/DOM preflight and sequential
+/// fixed-page Chromium capture. Failure performs no PDF or publication work.
 pub async fn raster_render(
   root : String,
   project : String,
   timeout_secs? : Int = default_render_timeout_secs,
 ) -> RenderRasterOutcome {
-  match preflight_render(root, project, timeout_secs~) {
-    PreflightFailed(failure) => RasterFailed(failure)
-    PreflightReady(context) =>
-      capture_render_pages_with(context, run=run_render_command, timeout_secs~)
+  guard plan_render(root, project) is Some(plan) else {
+    return RasterFailed(RenderFailure::{
+      code: "render.project",
+      detail: "render project must be a non-dot representable direct-child name under an absolute root",
+    })
   }
+  let lock_file = match acquire_project_operation_lock(root, project) {
+    ProjectOperationLocked(file) => file
+    ProjectOperationBusy =>
+      return RasterFailed(RenderFailure::{
+        code: "render.project.busy",
+        detail: "another generate/render operation owns project \{project}",
+      })
+    ProjectOperationLockFailed(error) =>
+      return RasterFailed(RenderFailure::{
+        code: "render.project.lock",
+        detail: "could not acquire project operation lock: \{error}",
+      })
+  }
+  defer lock_file.close()
+  defer lock_file.unlock()
+  raster_render_plan_with(plan, run=run_render_command, timeout_secs)
 }
 
 ///|
@@ -1251,6 +1485,21 @@ pub async fn render_project(
       "render.project", "render project must be a non-dot representable direct-child name under an absolute root",
     )
   }
+  let lock_file = match acquire_project_operation_lock(root, project) {
+    ProjectOperationLocked(file) => file
+    ProjectOperationBusy =>
+      return final_render_failed(
+        "render.project.busy",
+        "another generate/render operation owns project \{project}",
+      )
+    ProjectOperationLockFailed(error) =>
+      return final_render_failed(
+        "render.project.lock",
+        "could not acquire project operation lock: \{error}",
+      )
+  }
+  defer lock_file.close()
+  defer lock_file.unlock()
   let recovery_error : String? = try {
     recover_publication(plan.publication())
     None
@@ -1267,12 +1516,11 @@ pub async fn render_project(
       )
     None => ()
   }
-  let raster = match
-    preflight_render_with(plan, run=run_render_command, timeout_secs~) {
-    PreflightFailed(failure) => RasterFailed(failure)
-    PreflightReady(context) =>
-      capture_render_pages_with(context, run=run_render_command, timeout_secs~)
-  }
+  let raster = raster_render_plan_with(
+    plan,
+    run=run_render_command,
+    timeout_secs,
+  )
   complete_render_with(
     raster,
     run=run_render_command,

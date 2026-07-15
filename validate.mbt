@@ -234,34 +234,29 @@ fn append_range(
 }
 
 ///|
-/// Whether an open `<style>` or `<script>` tag — a raw-text element whose content
-/// browsers do not parse as HTML — begins at `<` index `i`, returning the tag
-/// name if so. A tag-name boundary (whitespace, `>`, `/`, or end) is required, so
-/// `<styles>` does not match; a close tag (`</style>`) never matches.
+/// Whether a scanner-relevant RAWTEXT/RCDATA container whose body browsers do
+/// not parse as child markup begins at `<` index `i`, returning its tag name. A
+/// tag-name boundary (whitespace, `>`, `/`, or end) is required, so `<styles>`
+/// does not match; a close tag (`</style>`) never matches. The static pass still
+/// rejects every unsafe member independently.
 fn raw_text_open(doc : Array[Char], i : Int) -> String? {
-  for tag in ["style", "script"] {
-    let needle = tag.to_array()
-    if ci_matches_at(doc, i + 1, needle) {
-      let after = i + 1 + needle.length()
-      if after >= doc.length() {
-        return Some(tag)
-      }
-      let c = doc[after]
-      if is_space(c) || c == '>' || c == '/' {
-        return Some(tag)
-      }
-    }
+  guard is_open_tag_start(doc, i, doc.length()) else { return None }
+  let (tag, _, _, _) = scan_open_tag(doc, i)
+  if is_raw_text_container(tag) {
+    Some(tag)
+  } else {
+    None
   }
-  None
 }
 
 ///|
 /// Clean the document in one context-aware pass: remove HTML comments and blank
-/// `<style>`/`<script>` raw text while retaining their tags. Ordinary tags are
-/// copied atomically via the quote-aware `skip_tag`, so `<!--` or `<style>`
-/// inside an attribute value cannot switch cleaning context and hide later
-/// markup. Raw-text end tags follow browser tokenization, comments swallow to
-/// their terminator (or EOF), and an unterminated raw-text element blanks to EOF.
+/// scanner-relevant RAWTEXT/RCDATA bodies while retaining their tags. Ordinary
+/// tags are copied atomically via browser-state-aware `skip_tag`, so `<!--` or
+/// `<style>` inside an attribute value cannot switch cleaning context and hide
+/// later markup. Container end tags follow browser tokenization, comments
+/// swallow to their terminator (or EOF), and an unterminated container blanks to
+/// EOF.
 fn clean_doc(doc : Array[Char]) -> Array[Char] {
   let out : Array[Char] = []
   let n = doc.length()
@@ -313,26 +308,97 @@ fn clean_doc(doc : Array[Char]) -> Array[Char] {
 // -- Tag and attribute scanning ---------------------------------------------
 
 ///|
-/// From `<` at index `i`, return the index just past the closing `>`, honoring
-/// quoted attribute values (a `>` inside `"..."`/`'...'` does not close the tag).
-/// Returns `end` if the tag is never closed before `end`.
+/// From `<` at index `i`, return the index just past the browser-tokenized
+/// closing `>`. Quotes protect `>` only in a quoted value entered after `=`;
+/// quotes in an attribute name or unquoted value remain ordinary data. This
+/// distinction keeps malformed markup from hiding a later real tag. Markup
+/// declarations/bogus comments end at their first `>`. Returns `end` when the
+/// tag never closes before `end`.
 fn skip_tag(doc : Array[Char], i : Int, end : Int) -> Int {
-  let mut j = i
-  let mut in_quote = false
+  let mut j = i + 1
+  if j < end && (doc[j] == '!' || doc[j] == '?') {
+    while j < end {
+      if doc[j] == '>' {
+        return j + 1
+      }
+      j = j + 1
+    }
+    return end
+  }
+  if j < end && doc[j] == '/' {
+    j = j + 1
+  }
+  // Tag-name state: every codepoint except HTML space, `/`, and `>` belongs to
+  // the name (including quotes and `=`). Attribute-value rules begin only once
+  // the tokenizer has crossed that boundary.
+  while j < end && !is_space(doc[j]) && doc[j] != '/' && doc[j] != '>' {
+    j = j + 1
+  }
+  // 0 = before attribute name; 1 = in attribute name; 2 = before value;
+  // 3 = unquoted value; 4 = quoted value. `=` starts a value only from state
+  // 1: between attributes it begins a malformed-but-real attribute name.
+  // Only state 4 makes a `>` inert.
+  let mut state = 0
   let mut quote = ' '
   while j < end {
     let c = doc[j]
-    if in_quote {
-      if c == quote {
-        in_quote = false
+    match state {
+      0 =>
+        if is_space(c) {
+          j = j + 1
+        } else if c == '/' {
+          j = j + 1
+        } else if c == '>' {
+          return j + 1
+        } else {
+          state = 1
+          j = j + 1
+        }
+      1 =>
+        if is_space(c) {
+          state = 0
+          j = j + 1
+        } else if c == '/' {
+          state = 0
+          j = j + 1
+        } else if c == '=' {
+          state = 2
+          j = j + 1
+        } else if c == '>' {
+          return j + 1
+        } else {
+          j = j + 1
+        }
+      2 =>
+        if is_space(c) {
+          j = j + 1
+        } else if c == '"' || c == '\'' {
+          state = 4
+          quote = c
+          j = j + 1
+        } else if c == '>' {
+          return j + 1
+        } else {
+          state = 3
+          j = j + 1
+        }
+      3 =>
+        if is_space(c) {
+          state = 0
+          j = j + 1
+        } else if c == '>' {
+          return j + 1
+        } else {
+          j = j + 1
+        }
+      4 => {
+        if c == quote {
+          state = 0
+        }
+        j = j + 1
       }
-    } else if c == '"' || c == '\'' {
-      in_quote = true
-      quote = c
-    } else if c == '>' {
-      return j + 1
+      _ => abort("unreachable tag-scanner state")
     }
-    j = j + 1
   }
   end
 }

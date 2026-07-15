@@ -399,6 +399,44 @@ test "static raw-text scan resumes at real closing tag" {
 }
 
 ///|
+/// A quote is syntax only after `=` starts an attribute value. In an attribute
+/// name or unquoted value Chromium retains it as data, closes the tag at `>`,
+/// and parses the following script. The validator must follow that boundary
+/// rather than swallowing the rest of the document as one quoted tag.
+test "static scan follows browser quote states in malformed attributes" {
+  let malformed_name = envelope(
+    body_close="<div data-bad\"=x></div><script>alert(1)</script></body>",
+  )
+  assert_true(
+    validate_deck(malformed_name, "project", no_assets())
+    .codes()
+    .contains("static.active_markup"),
+  )
+  let malformed_unquoted = envelope(
+    body_close="<div data-bad=x\"></div><script>alert(1)</script></body>",
+  )
+  assert_true(
+    validate_deck(malformed_unquoted, "project", no_assets())
+    .codes()
+    .contains("static.active_markup"),
+  )
+  // `=` starts an attribute name (rather than a value) when it appears between
+  // attributes or immediately after a quoted value. Its following quote is
+  // therefore data too, and cannot protect the tag's `>`.
+  for
+    malformed_equals in [
+      "<div =\"></div><script>alert(1)</script></body>", "<div a=\"x\"=\"></div><script>alert(1)</script></body>",
+    ] {
+    let deck = envelope(body_close=malformed_equals)
+    assert_true(
+      validate_deck(deck, "project", no_assets())
+      .codes()
+      .contains("static.active_markup"),
+    )
+  }
+}
+
+///|
 /// Each seeded slide-structure defect surfaces exactly its code. Every valid
 /// member carries correct text — the first `.eyebrow`/`.pageno` is well-formed —
 /// so only the structural defect surfaces, never a spurious text finding: a

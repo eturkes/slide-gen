@@ -103,6 +103,12 @@ async fn fresh_render_context(
   page_count : Int,
 ) -> RenderContext {
   recreate_stage(plan.publication())
+  @fs.mkdir(plan.input_dir)
+  @fs.write_file(
+    plan.input_deck_path,
+    render_test_deck(plan.project, page_count),
+    create_mode=CreateOrTruncate,
+  )
   @fs.mkdir(plan.profile_dir)
   RenderContext::{ plan, browser: "/stub/chrome", page_count }
 }
@@ -122,6 +128,63 @@ fn final_render_failure(outcome : RenderOutcome) -> RenderFailure {
   match outcome {
     RenderFailed(failure) => failure
     RenderPublished(_) => abort("expected final render failure")
+  }
+}
+
+///|
+/// The shared advisory lease rejects a second owner for the same project,
+/// permits an independent project, and becomes available again on release.
+async test "project operation locks serialize one key without blocking others" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-project-operation-lock")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let raced_dir = "\{root}/first-use"
+    let first_create = group.spawn(() => ensure_real_dir(raced_dir))
+    let second_create = group.spawn(() => ensure_real_dir(raced_dir))
+    first_create.wait()
+    second_create.wait()
+    assert_true(is_real_directory_no_follow(raced_dir))
+    async fn hold_and_contend() -> Unit {
+      let first = match acquire_project_operation_lock(root, "project") {
+        ProjectOperationLocked(file) => file
+        ProjectOperationBusy =>
+          abort("first project lock was unexpectedly busy")
+        ProjectOperationLockFailed(error) =>
+          abort("first project lock failed: \{error}")
+      }
+      defer first.close()
+      defer first.unlock()
+      assert_true(
+        acquire_project_operation_lock(root, "project") is ProjectOperationBusy,
+      )
+      let other = match acquire_project_operation_lock(root, "other") {
+        ProjectOperationLocked(file) => file
+        ProjectOperationBusy => abort("independent project lock was busy")
+        ProjectOperationLockFailed(error) =>
+          abort("independent project lock failed: \{error}")
+      }
+      defer other.close()
+      defer other.unlock()
+    }
+
+    hold_and_contend()
+    let reacquired = match acquire_project_operation_lock(root, "project") {
+      ProjectOperationLocked(file) => file
+      ProjectOperationBusy => abort("released project lock stayed busy")
+      ProjectOperationLockFailed(error) =>
+        abort("released project lock failed: \{error}")
+    }
+    defer reacquired.close()
+    defer reacquired.unlock()
+    let outside = "\{root}/outside-lock-target"
+    @fs.write_file(outside, "untouched", create_mode=CreateOrTruncate)
+    @fs.symlink("\{root}/renders/.locks/forged.lock", target=outside)
+    guard acquire_project_operation_lock(root, "forged")
+      is ProjectOperationLockFailed(error) else {
+      abort("forged lock leaf was accepted")
+    }
+    assert_true(error.contains("not a regular file"))
+    assert_eq(@fs.read_file(outside).text(), "untouched")
   }
 }
 
@@ -217,6 +280,15 @@ test "render plan paths cover filesystem root and exotic direct children" {
   assert_eq(root.stage_dir, "/renders/.partial/quo'te 道")
   assert_eq(root.backup_dir, "/renders/.previous/quo'te 道")
   assert_eq(root.live_dir, "/renders/quo'te 道")
+  assert_eq(root.input_dir, "/renders/.partial/quo'te 道/.render-input")
+  assert_eq(
+    root.input_deck_path,
+    "/renders/.partial/quo'te 道/.render-input/deck.html",
+  )
+  assert_eq(
+    root.input_assets_dir,
+    "/renders/.partial/quo'te 道/.render-input/assets",
+  )
   assert_eq(root.profile_dir, "/renders/.partial/quo'te 道/.chromium-profile")
   assert_eq(root.wrapper_path, "/renders/.partial/quo'te 道/.page.html")
   assert_eq(root.pdf_path, "/renders/.partial/quo'te 道/deck.pdf")
@@ -260,7 +332,7 @@ test "fixed page wrapper has exact geometry and escaped file URL" {
       #|iframe{position:absolute;left:0;top:-1440px;width:2560px;height:17280px;border:0}
       #|</style>
       #|</head>
-      #|<body><iframe title="slide page 2" src="file:///w/My%20Root/decks/quo%22te%20%E9%81%93/deck.html" scrolling="no"></iframe></body>
+      #|<body><iframe title="slide page 2" src="file:///w/My%20Root/renders/.partial/quo%22te%20%E9%81%93/.render-input/deck.html" scrolling="no"></iframe></body>
       #|</html>
       #|
     ),
@@ -299,7 +371,7 @@ test "Chromium DOM and screenshot argv are exact and bounded" {
       "--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=<-loopback>", "--host-resolver-rules=MAP * ~NOTFOUND",
       "--disable-background-networking", "--disable-component-update", "--disable-default-apps",
       "--disable-sync", "--metrics-recording-only", "--no-first-run", "--dump-dom",
-      "file:///w/My%20Root/decks/rehab%27s%20%E9%81%93/deck.html",
+      "file:///w/My%20Root/renders/.partial/rehab%27s%20%E9%81%93/.render-input/deck.html",
     ],
   )
   let screenshot = build_screenshot_argv(
@@ -395,9 +467,9 @@ async test "render preflight rejects unsafe input before every process" {
 }
 
 ///|
-/// Tool resolution is ordered after deterministic deck validation. A missing
-/// shim, unusable resolved path, missing fontconfig tool, or fallback font each
-/// receives one stable failure class and never reaches Chromium.
+/// Tool resolution is ordered after deterministic deck validation. Bounded
+/// timeout/hard-kill, a missing shim, an unusable path, a missing fontconfig
+/// tool, and a fallback font each receive one stable failure class.
 async test "render preflight classifies missing browser and font surfaces" {
   @async.with_task_group() <| group => {
     let root = @fs.tmpdir(prefix="slide-gen-render-tools")
@@ -417,6 +489,11 @@ async test "render preflight classifies missing browser and font surfaces" {
     )
     assert_eq(missing.code, "render.browser.resolve")
     assert_eq(missing_calls.length(), 1)
+
+    let browser_timeout = render_preflight_failure(
+      queued_render_preflight(plan, [render_command_result(137)], []),
+    )
+    assert_eq(browser_timeout.code, "render.browser.timeout")
 
     let bad_path_calls : Array[Array[String]] = []
     let bad_path = render_preflight_failure(
@@ -442,6 +519,18 @@ async test "render preflight classifies missing browser and font surfaces" {
     )
     assert_eq(font_tool.code, "render.font.resolve")
     assert_eq(font_tool_calls.length(), 2)
+
+    let font_timeout = render_preflight_failure(
+      queued_render_preflight(
+        plan,
+        [
+          render_command_result(0, stdout="\{browser}\n"),
+          render_command_result(124),
+        ],
+        [],
+      ),
+    )
+    assert_eq(font_timeout.code, "render.font.timeout")
 
     let fallback_calls : Array[Array[String]] = []
     let fallback = render_preflight_failure(
@@ -490,15 +579,90 @@ async test "render preflight resolves a decoy-safe matching browser DOM" {
     assert_eq(context.page_count, 1)
     assert_eq(context.browser, browser)
     assert_true(is_real_directory_no_follow(plan.profile_dir))
-    json_inspect(calls[0], content=["chromiumfish", "path"])
+    json_inspect(calls[0], content=[
+      "timeout", "--kill-after=30", "17", "chromiumfish", "path",
+    ])
     json_inspect(calls[1], content=[
-      "fc-match", "--format=%{family}\\n", "Noto Sans CJK JP",
+      "timeout", "--kill-after=30", "17", "fc-match", "--format=%{family}\\n", "Noto Sans CJK JP",
     ])
     assert_eq(calls[2][0], "timeout")
     assert_eq(calls[2][2], "17")
     assert_eq(calls[2][3], browser)
     assert_eq(calls[2][calls[2].length() - 2], "--dump-dom")
-    assert_eq(calls[2][calls[2].length() - 1], "file://\{plan.deck_path}")
+    assert_eq(calls[2][calls[2].length() - 1], "file://\{plan.input_deck_path}")
+  }
+}
+
+///|
+/// Source mutation after validation cannot substitute Chromium input: preflight
+/// copies the deck and direct assets before resolving tools, validates that
+/// snapshot, and points the DOM command only at the staged copy.
+async test "render preflight snapshots browser input before external tools" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-render-snapshot")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = test_render_plan(root, "project")
+    let original = render_test_deck(plan.project, 1).replace(
+      old="<div class=\"pageno\">",
+      new="<img src=\"assets/chart.png\"><div class=\"pageno\">",
+    )
+    write_render_test_deck(plan, original)
+    let source_assets = "\{plan.bundle_dir}/assets"
+    @fs.mkdir(source_assets)
+    let original_png = valid_png_header()
+    @fs.write_file(
+      "\{source_assets}/chart.png",
+      original_png,
+      create_mode=CreateOrTruncate,
+    )
+    let browser = "\{root}/chrome"
+    @fs.write_file(browser, "stub", create_mode=CreateOrTruncate)
+    let calls : Array[Array[String]] = []
+    let mut next = 0
+    async fn run(argv : Array[String]) -> RenderCommandResult {
+      calls.push(argv)
+      next = next + 1
+      match next {
+        1 => {
+          @fs.write_file(
+            plan.deck_path,
+            render_test_deck(plan.project, 1).replace(
+              old="<body>",
+              new="<body><script>location='https://example.invalid'</script>",
+            ),
+            create_mode=CreateOrTruncate,
+          )
+          @fs.write_file(
+            "\{source_assets}/chart.png",
+            "changed",
+            create_mode=CreateOrTruncate,
+          )
+          render_command_result(0, stdout="\{browser}\n")
+        }
+        2 => render_command_result(0, stdout="Noto Sans CJK JP\n")
+        3 => render_command_result(0, stdout=render_test_dom(1))
+        _ => abort("snapshot preflight issued an unexpected process")
+      }
+    }
+
+    let outcome = preflight_render_with(plan, run~, timeout_secs=11)
+    guard outcome is PreflightReady(context) else {
+      abort("snapshotted preflight did not pass")
+    }
+    assert_eq(context.page_count, 1)
+    assert_eq(next, 3)
+    assert_eq(read_regular_text(plan.input_deck_path), Some(original))
+    guard read_real_binary_no_follow("\{plan.input_assets_dir}/chart.png")
+      is Some(snapshot_png) else {
+      abort("snapshotted asset disappeared")
+    }
+    assert_true(snapshot_png == original_png)
+    assert_true(@fs.read_file(plan.deck_path).text().contains("<script>"))
+    assert_eq(@fs.read_file("\{source_assets}/chart.png").text(), "changed")
+    assert_eq(
+      calls[2][calls[2].length() - 1],
+      file_url(plan.input_deck_path).unwrap_or("<invalid>"),
+    )
   }
 }
 
@@ -765,6 +929,7 @@ async test "raster capture materializes escaped wrappers and orders page ten" {
     )
     assert_false(@fs.exists(plan.wrapper_path))
     assert_false(@fs.exists(plan.profile_dir))
+    assert_false(@fs.exists(plan.input_dir))
     assert_false(@fs.exists(plan.pdf_path))
     assert_eq(@fs.readdir(plan.stage_dir, include_hidden=true).length(), 12)
   }
@@ -869,6 +1034,7 @@ async test "live Chromium raster repeats rehab byte identically" {
     }
     assert_false(@fs.exists(plan.wrapper_path))
     assert_false(@fs.exists(plan.profile_dir))
+    assert_false(@fs.exists(plan.input_dir))
     assert_eq(@fs.readdir(plan.stage_dir, include_hidden=true).length(), 6)
   }
 }
@@ -1191,6 +1357,31 @@ async test "render project recovers interrupted publication before preflight" {
     assert_eq(failure.code, "render.deck.directory")
     assert_eq(@fs.read_file("\{plan.live_dir}/sentinel").text(), "old")
     assert_false(@fs.exists(plan.backup_dir))
+  }
+}
+
+///|
+/// Every public render entry fails before touching the stage when generation or
+/// a peer render already owns the project operation lease.
+async test "render entries report a concurrent project operation" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-render-entry-lock")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let lock_file = match acquire_project_operation_lock(root, "project") {
+      ProjectOperationLocked(file) => file
+      ProjectOperationBusy => abort("setup project lock was busy")
+      ProjectOperationLockFailed(error) =>
+        abort("setup project lock failed: \{error}")
+    }
+    defer lock_file.close()
+    defer lock_file.unlock()
+    let preflight = render_preflight_failure(preflight_render(root, "project"))
+    assert_eq(preflight.code, "render.project.busy")
+    let raster = render_raster_failure(raster_render(root, "project"))
+    assert_eq(raster.code, "render.project.busy")
+    let failure = final_render_failure(render_project(root, "project"))
+    assert_eq(failure.code, "render.project.busy")
+    assert_true(failure.detail.contains("project project"))
   }
 }
 

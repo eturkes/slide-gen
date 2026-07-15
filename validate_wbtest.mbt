@@ -71,6 +71,13 @@ test "clean_doc handles comments raw text and quoted decoys in one pass" {
     range_to_string(script, 0, script.length()),
     content="x<script></script>y",
   )
+  let rcdata = clean_doc(
+    "<title><section class='slide'></section></title><textarea><img src=x></textarea>keep".to_array(),
+  )
+  inspect(
+    range_to_string(rcdata, 0, rcdata.length()),
+    content="<title></title><textarea></textarea>keep",
+  )
   // </stylex> is not a name-boundary close, so blanking continues to the real one.
   let d = clean_doc("<style>x</stylex>y</style>z".to_array())
   inspect(range_to_string(d, 0, d.length()), content="<style></style>z")

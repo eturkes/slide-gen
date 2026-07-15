@@ -464,6 +464,30 @@ async test "publication rollback and restart recovery preserve the old deck" {
 }
 
 ///|
+/// Production generation shares rendering's project lease and returns before
+/// recovery, git inspection, or Codex execution when that key is already owned.
+async test "generate project reports a concurrent project operation" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-generate-entry-lock")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let lock_file = match acquire_project_operation_lock(root, "project") {
+      ProjectOperationLocked(file) => file
+      ProjectOperationBusy => abort("setup project lock was busy")
+      ProjectOperationLockFailed(error) =>
+        abort("setup project lock failed: \{error}")
+    }
+    defer lock_file.close()
+    defer lock_file.unlock()
+    guard generate_project(root, "project") is ExecFailed(message) else {
+      abort("concurrent generation did not fail")
+    }
+    assert_eq(
+      message, "project operation busy: another generate/render owns project",
+    )
+  }
+}
+
+///|
 /// A producer that exits successfully without writing deck.html is validated as
 /// a retained `deck.missing` failure, retried once, and left staged for inspection.
 async test "stage_validate_promote retains an invalid bundle after one retry" {

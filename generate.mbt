@@ -601,6 +601,17 @@ async fn generate_project_from_baseline(
 /// every tracked path remains protected until promotion.
 pub async fn generate_project(root : String, project : String) -> GenOutcome {
   let plan = plan_generate(root, project)
+  let lock_file = match acquire_project_operation_lock(root, project) {
+    ProjectOperationLocked(file) => file
+    ProjectOperationBusy =>
+      return ExecFailed(
+        "project operation busy: another generate/render owns \{project}",
+      )
+    ProjectOperationLockFailed(error) =>
+      return ExecFailed("project operation lock failed: \{error}")
+  }
+  defer lock_file.close()
+  defer lock_file.unlock()
   let recovery_error : String? = try
     recover_publication(plan.publication())
   catch {

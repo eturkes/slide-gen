@@ -39,6 +39,10 @@ render-probe: build
     SLIDE_GEN_RENDER_RASTER_LIVE=1 moon test --target {{target}} -f '*live Chromium raster*'
     SLIDE_GEN_RENDER_PDF_LIVE=1 moon test --target {{target}} -f '*live rendered PDF*'
 
+# Render both committed decks twice through the CLI and prove byte stability.
+live-render: build
+    SLIDE_GEN_BIN="$(realpath "$(find _build/{{target}} -name main.exe -path '*cmd/main*' -print -quit)")" SLIDE_GEN_RENDER_CLI_LIVE=1 moon test --target {{target}} -f '*render CLI repeats both committed six-page decks byte identically*'
+
 # Run the CLI; pass program args after `--` (e.g. `just run -- --help`).
 run *args:
     moon run cmd/main --target {{target}} {{args}}

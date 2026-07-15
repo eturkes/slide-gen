@@ -93,8 +93,8 @@ pub(all) enum RenderRasterOutcome {
 }
 
 ///|
-/// One completely published render. M3.4's CLI consumes this stable result
-/// without reaching into the opaque path plan.
+/// One completely published render. The CLI consumes this stable result without
+/// reaching into the opaque path plan.
 pub(all) struct RenderResult {
   project : String
   page_count : Int
@@ -1239,9 +1239,8 @@ async fn complete_render_with(
 }
 
 ///|
-/// Production M3.3 entry: recover an interrupted prior render publication,
-/// execute validator/browser/raster/PDF stages, then atomically replace live.
-/// M3.4 adds only named CLI parsing and outcome text around this function.
+/// Production entry: recover an interrupted prior render publication, execute
+/// validator/browser/raster/PDF stages, then atomically replace live.
 pub async fn render_project(
   root : String,
   project : String,
@@ -1280,6 +1279,29 @@ pub async fn render_project(
     publish=promote_stage,
     timeout_secs~,
   )
+}
+
+///|
+/// Pure CLI mapping for final render outcomes. A publication reports its exact
+/// PDF path and bounded page count on stdout with exit zero; every stable render
+/// failure retains its machine-readable code and detail for stderr with exit one.
+pub fn render_cli_outcome(outcome : RenderOutcome) -> (String, Int) {
+  match outcome {
+    RenderPublished(result) => {
+      let page_word = if result.page_count == 1 { "page" } else { "pages" }
+      (
+        "rendered \{result.project}: \{result.page_count} \{page_word} -> \{result.pdf_path}\n",
+        0,
+      )
+    }
+    RenderFailed(failure) =>
+      (
+        final_newline(
+          "slide-gen: render failed [\{failure.code}]: \{failure.detail}",
+        ),
+        1,
+      )
+  }
 }
 
 ///|

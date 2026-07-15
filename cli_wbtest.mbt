@@ -16,6 +16,7 @@ test "cli help" {
       #|  disable   Disable a sibling project (also clears a stale entry).
       #|  toggle    Flip a sibling project's enabled state.
       #|  generate  Generate one sibling deck or every enabled deck via codex.
+      #|  render    Render one committed deck to page PNGs and PDF.
       #|  help      Print help for the subcommand(s).
       #|
       #|Options:

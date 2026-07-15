@@ -54,9 +54,10 @@ async fn report(decision : @lib.Decision, name : String) -> Unit {
 ///|
 /// Entry point: parse argv, anchor on the repository root (the nearest ancestor
 /// whose `moon.mod` declares this module) so every subcommand works
-/// run-from-anywhere, then dispatch. Parse failures exit 2; runtime failures (no
-/// repo root, filesystem errors, an unknown project) exit 1 with a stderr
-/// message; success exits 0.
+/// run-from-anywhere, then dispatch. Named render dispatches directly against
+/// the committed deck home; every other command discovers siblings only when it
+/// needs them. Parse failures exit 2; runtime failures exit 1 on stderr; success
+/// exits 0.
 async fn main {
   let matches = try @lib.cli().parse() catch {
     err => die("slide-gen: \{err}\n", 2)
@@ -72,79 +73,94 @@ async fn main {
           1,
         )
     }
-    let (parent, name) = @lib.split_path(root)
-    let projects = @lib.discover(parent, exclude=name)
-    let state_path = "\{root}/enabled.txt"
     match matches.subcommand {
-      Some(("list", _)) =>
-        for project in projects {
-          println(project)
+      Some(("render", sub)) => {
+        let target = get_name(sub)
+        let (message, code) = @lib.render_cli_outcome(
+          @lib.render_project(root, target),
+        )
+        if code == 0 {
+          @stdio.stdout.write(message)
+        } else {
+          die(message, code)
         }
-      Some(("status", _)) => {
-        let text = @lib.format_status(projects, @lib.read_state(state_path))
-        if !text.is_empty() {
-          println(text)
-        }
       }
-      Some(("enable", sub)) => {
-        let target = get_name(sub)
-        report(
-          @lib.apply_action(state_path, projects, target, @lib.Enable),
-          target,
-        )
-      }
-      Some(("disable", sub)) => {
-        let target = get_name(sub)
-        report(
-          @lib.apply_action(state_path, projects, target, @lib.Disable),
-          target,
-        )
-      }
-      Some(("toggle", sub)) => {
-        let target = get_name(sub)
-        report(
-          @lib.apply_action(state_path, projects, target, @lib.Toggle),
-          target,
-        )
-      }
-      Some(("generate", sub)) => {
-        let dry_run = sub.flags.get("dry-run") is Some(true)
-        match get_optional_name(sub) {
-          Some(target) => {
-            if !projects.contains(target) {
-              die(
-                "slide-gen: unknown project '\{target}' (run `slide-gen list` to see candidates)\n",
-                1,
-              )
+      _ => {
+        let (parent, name) = @lib.split_path(root)
+        let projects = @lib.discover(parent, exclude=name)
+        let state_path = "\{root}/enabled.txt"
+        match matches.subcommand {
+          Some(("list", _)) =>
+            for project in projects {
+              println(project)
             }
-            if dry_run {
-              @stdio.stdout.write(@lib.render_dry_run(root, target))
-            } else {
-              let outcome = @lib.generate_project(root, target)
-              let (message, code) = @lib.render_outcome(outcome)
-              if code == 0 {
+          Some(("status", _)) => {
+            let text = @lib.format_status(projects, @lib.read_state(state_path))
+            if !text.is_empty() {
+              println(text)
+            }
+          }
+          Some(("enable", sub)) => {
+            let target = get_name(sub)
+            report(
+              @lib.apply_action(state_path, projects, target, @lib.Enable),
+              target,
+            )
+          }
+          Some(("disable", sub)) => {
+            let target = get_name(sub)
+            report(
+              @lib.apply_action(state_path, projects, target, @lib.Disable),
+              target,
+            )
+          }
+          Some(("toggle", sub)) => {
+            let target = get_name(sub)
+            report(
+              @lib.apply_action(state_path, projects, target, @lib.Toggle),
+              target,
+            )
+          }
+          Some(("generate", sub)) => {
+            let dry_run = sub.flags.get("dry-run") is Some(true)
+            match get_optional_name(sub) {
+              Some(target) => {
+                if !projects.contains(target) {
+                  die(
+                    "slide-gen: unknown project '\{target}' (run `slide-gen list` to see candidates)\n",
+                    1,
+                  )
+                }
+                if dry_run {
+                  @stdio.stdout.write(@lib.render_dry_run(root, target))
+                } else {
+                  let outcome = @lib.generate_project(root, target)
+                  let (message, code) = @lib.render_outcome(outcome)
+                  if code == 0 {
+                    @stdio.stdout.write(message)
+                  } else {
+                    die(message, code)
+                  }
+                }
+              }
+              None => {
+                let (message, code) = @lib.generate_enabled(
+                  root,
+                  projects,
+                  state_path,
+                  dry_run~,
+                )
                 @stdio.stdout.write(message)
-              } else {
-                die(message, code)
+                if code != 0 {
+                  c_exit(code)
+                  abort("unreachable: exit returned")
+                }
               }
             }
           }
-          None => {
-            let (message, code) = @lib.generate_enabled(
-              root,
-              projects,
-              state_path,
-              dry_run~,
-            )
-            @stdio.stdout.write(message)
-            if code != 0 {
-              c_exit(code)
-              abort("unreachable: exit returned")
-            }
-          }
+          _ => ()
         }
       }
-      _ => ()
     }
   } catch {
     err => die("slide-gen: \{err}\n", 1)

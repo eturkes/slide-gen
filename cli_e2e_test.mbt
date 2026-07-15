@@ -127,6 +127,42 @@ async test "cli end-to-end" {
     let (code, _, _) = @process.collect_output(bin, ["enable"], cwd=repo)
     assert_eq(code, 2)
 
+    // render also requires one positional -> usage error (exit 2).
+    let (code, _, _) = @process.collect_output(bin, ["render"], cwd=repo)
+    assert_eq(code, 2)
+
+    // Render names follow the direct-child policy before filesystem access.
+    let (code, _, err) = @process.collect_output(
+      bin,
+      ["render", ".partial"],
+      cwd=repo,
+    )
+    assert_eq(code, 1)
+    inspect(
+      err.text(),
+      content=(
+        #|slide-gen: render failed [render.project]: render project must be a non-dot representable direct-child name under an absolute root
+        #|
+      ),
+    )
+
+    // A valid name absent from sibling discovery reaches committed-bundle
+    // validation rather than the sibling-only "unknown project" branch.
+    let (code, _, err) = @process.collect_output(
+      bin,
+      ["render", "archived"],
+      cwd=repo,
+    )
+    assert_eq(code, 1)
+    assert_true(
+      err
+      .text()
+      .contains(
+        "slide-gen: render failed [render.deck.directory]: deck bundle is missing",
+      ),
+    )
+    assert_false(err.text().contains("unknown project"))
+
     // unknown subcommand -> usage error (exit 2).
     let (code, _, _) = @process.collect_output(bin, ["bogus"], cwd=repo)
     assert_eq(code, 2)
@@ -358,4 +394,105 @@ async test "generate enabled batch live codex acceptance" {
       assert_true(report.ok(), msg=report.render())
     }
   }
+}
+
+///|
+/// Explicit M3 CLI acceptance gate: render both real committed six-page decks
+/// twice from inside their bundle directories, compare SHA-256 manifests, and
+/// prove the tracked Git surface is byte-for-byte unchanged. `spine-segmentation`
+/// remains renderable even when its source sibling is absent; enabled state is
+/// intentionally neither read nor consulted.
+async test "render CLI repeats both committed six-page decks byte identically" {
+  guard @env.get_env_var("SLIDE_GEN_RENDER_CLI_LIVE") is Some(_) else { return }
+  guard @env.get_env_var("SLIDE_GEN_BIN") is Some(bin) else { return }
+  guard find_repo_root() is Some(root) else {
+    abort("live CLI render could not find the slide-gen root")
+  }
+  let (status_code, status_out, status_err) = @process.collect_output(
+    "git",
+    ["status", "--porcelain=v1", "-z", "--untracked-files=no"],
+    cwd=root,
+  )
+  assert_eq(status_code, 0, msg=status_err.text())
+  let status_before = status_out.binary()
+  let (diff_code, diff_out, diff_err) = @process.collect_output(
+    "git",
+    ["diff", "--binary", "--no-ext-diff", "HEAD", "--"],
+    cwd=root,
+  )
+  assert_eq(diff_code, 0, msg=diff_err.text())
+  let diff_before = diff_out.binary()
+  let page_names = [
+    "page_01.png", "page_02.png", "page_03.png", "page_04.png", "page_05.png", "page_06.png",
+  ]
+  for project in ["rehab", "spine-segmentation"] {
+    let render_dir = "\{root}/renders/\{project}"
+    let pdf = "\{render_dir}/deck.pdf"
+    let expected = "rendered \{project}: 6 pages -> \{pdf}\n"
+    let hash_paths = [pdf]
+    for name in page_names {
+      hash_paths.push("\{render_dir}/\{name}")
+    }
+    let cwd = "\{root}/decks/\{project}"
+    let (first_code, first_out, first_err) = @process.collect_output(
+      bin,
+      ["render", project],
+      cwd~,
+    )
+    assert_eq(
+      first_code,
+      0,
+      msg="first \{project} render failed: \{first_err.text()}",
+    )
+    assert_eq(first_out.text(), expected)
+    assert_eq(first_err.text(), "")
+    let (hash_code, hash_out, hash_err) = @process.collect_output(
+      "sha256sum",
+      hash_paths,
+      cwd=root,
+    )
+    assert_eq(hash_code, 0, msg=hash_err.text())
+    let first_hashes = hash_out.text()
+    let (info_code, info_out, info_err) = @process.collect_output(
+      "env",
+      ["LC_ALL=C", "pdfinfo", pdf],
+      cwd=root,
+    )
+    assert_eq(info_code, 0, msg=info_err.text())
+    assert_true(info_out.text().contains("Pages:           6\n"))
+
+    let (second_code, second_out, second_err) = @process.collect_output(
+      bin,
+      ["render", project],
+      cwd~,
+    )
+    assert_eq(
+      second_code,
+      0,
+      msg="second \{project} render failed: \{second_err.text()}",
+    )
+    assert_eq(second_out.text(), expected)
+    assert_eq(second_err.text(), "")
+    let (repeat_code, repeat_out, repeat_err) = @process.collect_output(
+      "sha256sum",
+      hash_paths,
+      cwd=root,
+    )
+    assert_eq(repeat_code, 0, msg=repeat_err.text())
+    assert_eq(repeat_out.text(), first_hashes)
+  }
+  let (after_status_code, after_status_out, after_status_err) = @process.collect_output(
+    "git",
+    ["status", "--porcelain=v1", "-z", "--untracked-files=no"],
+    cwd=root,
+  )
+  assert_eq(after_status_code, 0, msg=after_status_err.text())
+  assert_true(after_status_out.binary() == status_before)
+  let (after_diff_code, after_diff_out, after_diff_err) = @process.collect_output(
+    "git",
+    ["diff", "--binary", "--no-ext-diff", "HEAD", "--"],
+    cwd=root,
+  )
+  assert_eq(after_diff_code, 0, msg=after_diff_err.text())
+  assert_true(after_diff_out.binary() == diff_before)
 }

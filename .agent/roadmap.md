@@ -15,7 +15,7 @@ Seed: commit `0526d53` (repo init: deck.html, agent guidance, `.agent` boilerpla
 ## Milestone ledger
 - **M1 CLI foundation** — discovery + toggle state (no codex, no render). STATUS: **REVIEWED**.
 - **M2 Generation** — `codex exec` per project → template-styled deck BUNDLE (`deck.html` + `provenance.json` + `gaps.md` + `figures.py` + `assets/*.png`), gated by a deterministic MoonBit validator. STATUS: **REVIEWED**.
-- **M3 Rendering** — `deck.html` → per-page PNG → PDF@72dpi; mirror prototype `render.py` (chromiumfish + raster, section count from DOM). STATUS: **IN-PROGRESS**.
+- **M3 Rendering** — `deck.html` → per-page PNG → PDF@72dpi; mirror prototype `render.py` (chromiumfish + raster, section count from DOM). STATUS: **IMPLEMENTED**.
 - **M4 Integration / packaging / docs** — end-to-end generate+render `run` over the enabled set, distribution, README, quality gates. STATUS: UNPLANNED.
 
 Plan each milestone in its own session when it becomes active (M4 deferred per owner). M2's parked decisions were resolved at its plan (furigana · sandbox · input scope · output commit · codex-trust — see M2 §Decisions); M3 resolves raster/DSF/DPI below. Still parked: end-to-end generate+render `run` orchestration + distribution (M4).
@@ -75,7 +75,7 @@ Sequence: M2.1a→b-i→b-ii→c→M2.2a-i→a-ii→b-i→b-ii (pure/async valid
 
 ---
 
-## M3 — Rendering (IN-PROGRESS)
+## M3 — Rendering (IMPLEMENTED)
 
 Scope: `slide-gen render <project>` consumes one committed `decks/<project>/deck.html` + its committed PNG assets and publishes derived, gitignored `renders/<project>/{page_NN.png,deck.pdf}`. Render is source-project-independent (a committed deck remains renderable after its sibling disappears), never reruns `figures.py`, and has no enabled-set batch mode; M4 owns generate→render `run`, enabled orchestration, distribution, and docs.
 
@@ -96,6 +96,6 @@ Scope: `slide-gen render <project>` consumes one committed `decks/<project>/deck
 - **M3.2b Chromium preflight + DOM page count** [DONE] — validator-first no-follow input gate, resolved browser/font surface, isolated real profile, stable injected failures, and shared-scanner source↔DOM parity across 1…99; the explicit live gate reports six pages for both committed decks. Detail: code + `git log --grep "(M3.2b"`.
 - **M3.2c Per-page Chromium raster** [DONE] — fresh-stage sequential capture, direct-wrapper/output identity checks, exact IHDR + closed page-only cleanup, numeric ordering through 99, and stable TERM/hard-kill failures; rehab's six real pages repeat byte-identically on the live surface. Detail: code + `git log --grep "(M3.2c"`.
 - **M3.3 PDF assembly + atomic render publication** [DONE] — repo-root-pinned uv/img2pdf lock, post-process raster/PDF/layout revalidation, rollback-safe render recovery/promotion, and pre-deck-promotion invalidation of every restorable stale render; injected capture/converter/forgery/layout/promotion failures retain old live output, while a real two-page Poppler gate proves ordered 2560×1440-point/72-dpi lossless streams and byte-stable reruns. Detail: code + `git log --grep "(M3.3"`.
-- **M3.4 Named render CLI + two-deck proof** [OPEN] — add required-name `render` subcommand + thin dispatch/outcome renderer. Validate a non-dot representable direct-child name and real committed bundle, independent of discovery/enabled state; print exact output/page count, runtime failures → stderr + exit 1. Extend CLI/e2e goldens + just live-render gate; render both committed six-page bundles twice, compare hashes, rasterize the PDFs via `pdftoppm`, inspect all 12 pages for clipping/tofu/assets/ordering, and confirm the tracked worktree stays unchanged. **Accept:** full gates green; both `renders/<project>/deck.pdf` outputs have six visually clean pages.
+- **M3.4 Named render CLI + two-deck proof** [DONE] — required-name dispatch bypasses sibling/enabled state, exact success/failure output is golden-tested, and `just live-render` proves both committed six-page decks byte-stable across repeat CLI runs with an unchanged tracked tree; 12-page PDF raster inspection found correct order, intact glyphs/assets, and no clipping. Full gates: 152 MoonBit + 7 Python tests, 0-warn/lint; all live render probes green. Detail: code + `git log --grep "(M3.4"`.
 
 Sequence: M3.1a (gate-independent shared publication) → M3.1b (browser-input security gate) → M3.2a (pure contract) → M3.2b (DOM/tool boundary) → M3.2c (PNG producer) → M3.3 (PDF + publish) → M3.4 (CLI + live proof). Every slice runs `just fmt check build test`; M3.2b+ add the explicit live-render gate when their external surface lands. All DONE → M3 IMPLEMENTED → exhaustive M3 review in the next session.

@@ -75,6 +75,24 @@ pub(all) enum RenderPreflightOutcome {
 }
 
 ///|
+/// Browser-clean staged rasters handed to M3.3. Paths are one per page in
+/// numeric order; the stage contains exactly those real validated PNG files
+/// when this value is constructed.
+pub(all) struct RenderPages {
+  plan : RenderPlan
+  paths : Array[String]
+}
+
+///|
+/// M3.2c outcome: either every fixed page was captured and browser-only scratch
+/// was removed, or rasterization stopped at one stable failure. This raster
+/// layer itself performs no PDF or publication action.
+pub(all) enum RenderRasterOutcome {
+  RasterReady(RenderPages)
+  RasterFailed(RenderFailure)
+}
+
+///|
 /// Injectable process result. Production fills it through collect_output;
 /// white-box tests return controlled tool/font/Chromium outcomes without
 /// spawning processes.
@@ -215,6 +233,18 @@ pub fn render_page_path(plan : RenderPlan, page : Int) -> String? {
 }
 
 ///|
+/// Ordered page basenames for one bounded render, without the later PDF.
+fn expected_page_names(page_count : Int) -> Array[String]? {
+  guard page_count >= 1 && page_count <= max_render_pages else { return None }
+  let names : Array[String] = []
+  for page in 1..<=page_count {
+    guard render_page_name(page) is Some(name) else { return None }
+    names.push(name)
+  }
+  Some(names)
+}
+
+///|
 /// Render the tiny stage-local page wrapper. Its viewport clips one tall iframe
 /// whose height is exactly the deck height; shifting the iframe by one fixed
 /// page per capture avoids fragments, unbounded screenshots, and crop tools.
@@ -339,6 +369,13 @@ fn render_command_detail(result : RenderCommandResult) -> String {
     return stdout
   }
   "exit code \{result.code}"
+}
+
+///|
+/// GNU timeout returns 124 after a terminating deadline and 137 when its
+/// kill-after escalation had to SIGKILL a command that ignored termination.
+fn render_command_timed_out(code : Int) -> Bool {
+  code == 124 || code == 137
 }
 
 ///|
@@ -475,7 +512,7 @@ async fn preflight_render_with(
     )
   }
   let dom_result = run(argv)
-  if dom_result.code == 124 {
+  if render_command_timed_out(dom_result.code) {
     return render_preflight_failed(
       "render.dom.timeout", "Chromium DOM probe exceeded its bounded runtime",
     )
@@ -551,12 +588,7 @@ pub fn build_screenshot_argv(
 /// Ordered expected root basenames for a complete staged render: every page in
 /// numeric order, then the PDF. Invalid counts have no valid layout.
 pub fn expected_render_names(page_count : Int) -> Array[String]? {
-  guard page_count >= 1 && page_count <= max_render_pages else { return None }
-  let names : Array[String] = []
-  for page in 1..<=page_count {
-    guard render_page_name(page) is Some(name) else { return None }
-    names.push(name)
-  }
+  guard expected_page_names(page_count) is Some(names) else { return None }
   names.push("deck.pdf")
   Some(names)
 }
@@ -650,6 +682,285 @@ pub fn validate_page_png(data : Bytes) -> String? {
     return Some("render.png.interlace")
   }
   None
+}
+
+///|
+/// Construct one stable raster failure while retaining the shared diagnostic
+/// shape used by preflight and the eventual CLI.
+fn render_raster_failed(code : String, detail : String) -> RenderRasterOutcome {
+  RasterFailed(RenderFailure::{ code, detail })
+}
+
+///|
+/// Read one direct real regular file as bytes. The no-follow classification is
+/// repeated immediately before the read; publication-level hostile-race
+/// resistance remains outside this portable path-based boundary.
+async fn read_real_binary_no_follow(path : String) -> Bytes? {
+  if !is_real_regular_no_follow(path) {
+    return None
+  }
+  try @fs.read_file(path).binary() catch {
+    _ => None
+  } noraise {
+    data => Some(data)
+  }
+}
+
+///|
+/// Preflight must hand rasterization a fresh stage containing only its isolated
+/// real Chromium profile. This makes a stale screenshot unusable even when a
+/// later browser command exits successfully without writing output.
+async fn raster_stage_is_fresh(context : RenderContext) -> Bool {
+  if !is_real_directory_no_follow(context.plan.stage_dir) ||
+    !is_real_directory_no_follow(context.plan.profile_dir) {
+    return false
+  }
+  try
+    @fs.readdir(
+      context.plan.stage_dir,
+      include_hidden=true,
+      include_special=false,
+    )
+  catch {
+    _ => false
+  } noraise {
+    entries => entries.length() == 1 && entries[0] == ".chromium-profile"
+  }
+}
+
+///|
+/// Remove wrapper/profile scratch, then re-enumerate and revalidate the exact
+/// page-only stage. Numeric construction, rather than directory order, defines
+/// the returned path order (including page 10+).
+async fn finish_raster_stage(context : RenderContext) -> RenderRasterOutcome {
+  let plan = context.plan
+  if !is_real_directory_no_follow(plan.stage_dir) {
+    return render_raster_failed(
+      "render.raster.stage", "render stage ceased to be a real directory",
+    )
+  }
+  let cleanup_error : String? = try {
+    remove_entry_no_follow(plan.wrapper_path)
+    remove_entry_no_follow(plan.profile_dir)
+    None
+  } catch {
+    error => Some("\{error}")
+  } noraise {
+    result => result
+  }
+  match cleanup_error {
+    Some(error) =>
+      return render_raster_failed(
+        "render.raster.cleanup",
+        "could not remove browser scratch: \{error}",
+      )
+    None => ()
+  }
+  if !is_real_directory_no_follow(plan.stage_dir) {
+    return render_raster_failed(
+      "render.raster.stage", "render stage ceased to be a real directory",
+    )
+  }
+  guard expected_page_names(context.page_count) is Some(expected) else {
+    return render_raster_failed(
+      "render.raster.context", "raster page count is outside the bounded range",
+    )
+  }
+  let entries : Array[String] = try
+    @fs.readdir(plan.stage_dir, include_hidden=true, include_special=false)
+  catch {
+    error =>
+      return render_raster_failed(
+        "render.raster.layout",
+        "could not enumerate raster stage: \{error}",
+      )
+  } noraise {
+    names => names
+  }
+  let expected_set = @set.Set(expected[:])
+  let unexpected : Array[String] = []
+  for name in entries {
+    if !expected_set.contains(name) {
+      unexpected.push(name)
+    }
+  }
+  unexpected.sort_by(lex_compare)
+  if unexpected.length() > 0 {
+    return render_raster_failed(
+      "render.raster.layout",
+      "unexpected staged raster entry: \{unexpected[0]}",
+    )
+  }
+  if entries.length() != expected.length() {
+    return render_raster_failed(
+      "render.raster.layout", "staged raster set is incomplete",
+    )
+  }
+  let paths : Array[String] = []
+  for page in 1..<=context.page_count {
+    guard render_page_path(plan, page) is Some(path) else {
+      return render_raster_failed(
+        "render.raster.context", "could not construct ordered page path",
+      )
+    }
+    guard read_real_binary_no_follow(path) is Some(data) else {
+      return render_raster_failed(
+        "render.raster.output",
+        "page \{page} is missing, unreadable, non-regular, or a symlink",
+      )
+    }
+    match validate_page_png(data) {
+      Some(code) =>
+        return render_raster_failed(
+          code,
+          "page \{page} failed the PNG contract during final validation",
+        )
+      None => ()
+    }
+    paths.push(path)
+  }
+  RasterReady(RenderPages::{ plan, paths })
+}
+
+///|
+/// Sequential fixed-page capture over a validator/browser-ready context. Every
+/// wrapper is written as a direct real file, every prior output path is removed
+/// before its producer runs, and stage/profile/wrapper/output identities are
+/// checked after each process. A failed page returns immediately.
+async fn capture_render_pages_with(
+  context : RenderContext,
+  run~ : async (Array[String]) -> RenderCommandResult,
+  timeout_secs? : Int = default_render_timeout_secs,
+) -> RenderRasterOutcome {
+  if context.page_count < 1 || context.page_count > max_render_pages {
+    return render_raster_failed(
+      "render.raster.context", "raster page count is outside the bounded range",
+    )
+  }
+  if !raster_stage_is_fresh(context) {
+    return render_raster_failed(
+      "render.raster.stage_dirty", "render stage must contain only a real isolated Chromium profile",
+    )
+  }
+  for page in 1..<=context.page_count {
+    if !is_real_directory_no_follow(context.plan.stage_dir) ||
+      !is_real_directory_no_follow(context.plan.profile_dir) {
+      return render_raster_failed(
+        "render.raster.stage", "render stage or Chromium profile was swapped",
+      )
+    }
+    guard render_page_wrapper(context.plan, page, context.page_count)
+      is Some(wrapper) else {
+      return render_raster_failed(
+        "render.wrapper.compose",
+        "could not compose page \{page} wrapper",
+      )
+    }
+    guard render_page_path(context.plan, page) is Some(output) else {
+      return render_raster_failed(
+        "render.raster.context",
+        "could not construct page \{page} output path",
+      )
+    }
+    let write_error : String? = try {
+      remove_entry_no_follow(context.plan.wrapper_path)
+      remove_entry_no_follow(output)
+      @fs.write_file(
+        context.plan.wrapper_path,
+        wrapper,
+        create_mode=CreateOrTruncate,
+      )
+      None
+    } catch {
+      error => Some("\{error}")
+    } noraise {
+      result => result
+    }
+    match write_error {
+      Some(error) =>
+        return render_raster_failed(
+          "render.wrapper.write",
+          "could not materialize page \{page} wrapper: \{error}",
+        )
+      None => ()
+    }
+    if !is_real_regular_no_follow(context.plan.wrapper_path) ||
+      read_regular_text(context.plan.wrapper_path) != Some(wrapper) {
+      return render_raster_failed(
+        "render.wrapper.forged",
+        "page \{page} wrapper is not the direct regular file that was written",
+      )
+    }
+    guard build_screenshot_argv(
+        context.plan,
+        context.browser,
+        page,
+        timeout_secs~,
+      )
+      is Some(argv) else {
+      return render_raster_failed(
+        "render.raster.argv",
+        "could not construct page \{page} Chromium command",
+      )
+    }
+    let result = run(argv)
+    if render_command_timed_out(result.code) {
+      return render_raster_failed(
+        "render.raster.timeout",
+        "Chromium page \{page} capture exceeded its bounded runtime",
+      )
+    }
+    if result.code != 0 {
+      return render_raster_failed(
+        "render.raster.exec",
+        "Chromium page \{page} capture failed: \{render_command_detail(result)}",
+      )
+    }
+    if !is_real_directory_no_follow(context.plan.stage_dir) ||
+      !is_real_directory_no_follow(context.plan.profile_dir) {
+      return render_raster_failed(
+        "render.raster.stage", "render stage or Chromium profile was swapped",
+      )
+    }
+    if !is_real_regular_no_follow(context.plan.wrapper_path) ||
+      read_regular_text(context.plan.wrapper_path) != Some(wrapper) {
+      return render_raster_failed(
+        "render.wrapper.forged",
+        "page \{page} wrapper was replaced during capture",
+      )
+    }
+    guard read_real_binary_no_follow(output) is Some(data) else {
+      return render_raster_failed(
+        "render.raster.output",
+        "page \{page} output is missing, unreadable, non-regular, or a symlink",
+      )
+    }
+    match validate_page_png(data) {
+      Some(code) =>
+        return render_raster_failed(
+          code,
+          "page \{page} output failed the PNG contract",
+        )
+      None => ()
+    }
+  }
+  finish_raster_stage(context)
+}
+
+///|
+/// Production M3.2c entry: deterministic deck/tool/DOM preflight followed by
+/// sequential fixed-page Chromium capture. Later units consume only the ready
+/// page set; failure performs no PDF or publication work.
+pub async fn raster_render(
+  root : String,
+  project : String,
+  timeout_secs? : Int = default_render_timeout_secs,
+) -> RenderRasterOutcome {
+  match preflight_render(root, project, timeout_secs~) {
+    PreflightFailed(failure) => RasterFailed(failure)
+    PreflightReady(context) =>
+      capture_render_pages_with(context, run=run_render_command, timeout_secs~)
+  }
 }
 
 ///|

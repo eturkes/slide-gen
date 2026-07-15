@@ -33,9 +33,10 @@ test: build
 # Full gate sweep: format, check, build, test.
 all: fmt check build test
 
-# Probe the installed ChromiumFish + Noto surface against both committed decks.
+# Probe DOM parity plus repeatable rehab rasters on the installed browser/font surface.
 render-probe: build
-    SLIDE_GEN_RENDER_LIVE=1 moon test --target {{target}} -f '*live Chromium DOM probe*'
+    SLIDE_GEN_RENDER_DOM_LIVE=1 moon test --target {{target}} -f '*live Chromium DOM probe*'
+    SLIDE_GEN_RENDER_RASTER_LIVE=1 moon test --target {{target}} -f '*live Chromium raster*'
 
 # Run the CLI; pass program args after `--` (e.g. `just run -- --help`).
 run *args:

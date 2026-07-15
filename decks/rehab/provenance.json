@@ -1,0 +1,142 @@
+[
+  {
+    "id": "project-purpose",
+    "slide": 1,
+    "claim": "The project is a Japanese/English analytics and prediction pipeline for spinal-cord-injury rehabilitation.",
+    "status": "verified",
+    "src": "rehab/README.md:1-6",
+    "quote": "Bilingual (JA / EN) analytics + prediction pipeline for a spinal-cord-injury (SCI)\nrehabilitation center."
+  },
+  {
+    "id": "schema-driven-bilingual",
+    "slide": 1,
+    "claim": "Schema YAML drives clinical labels, factor levels, and UI strings for Japanese and English rendering.",
+    "status": "verified",
+    "src": "rehab/README.md:3-6",
+    "quote": "All clinical content (column labels, factor levels, UI\nstrings) is data-driven from `schema/*.yaml`, so the same code base renders\nidentical results in Japanese and English."
+  },
+  {
+    "id": "repo-privacy-boundary",
+    "slide": 1,
+    "claim": "The committed repository ships code, schema, and aggregate descriptive statistics without row-level patient data.",
+    "status": "verified",
+    "src": "rehab/README.md:8-11",
+    "quote": "The repository only ships\n> code, schema, and aggregated descriptive statistics, with *no* row-level patient\n> data."
+  },
+  {
+    "id": "loader-normalization",
+    "slide": 2,
+    "claim": "The loader reads cp932 and normalizes _, NT, NA, and ND as missing sentinels.",
+    "status": "verified",
+    "src": "rehab/README.md:85-90",
+    "quote": "Reads the raw file as **cp932** (Shift-JIS superset).\n- Normalizes the `_` / `NT` / `NA` / `ND` missing sentinels."
+  },
+  {
+    "id": "analysis-cohort",
+    "slide": 2,
+    "claim": "After filtering 301 empty placeholder episodes, the analysis universe is 899 episodes from 866 unique patients.",
+    "status": "verified",
+    "src": "rehab/README.md:102-110",
+    "quote": "The analysis\nuniverse is therefore **899 episodes / 866 unique patients**"
+  },
+  {
+    "id": "admission-backfill",
+    "slide": 2,
+    "claim": "Admission features start at 0day and backfill through 72h, 2w, and 4w using the first non-null value.",
+    "status": "verified",
+    "src": "rehab/README.md:112-114",
+    "quote": "Admission features are taken from the `0day` timepoint with backfill from\n`72h → 2w → 4w` (first-non-null wins)"
+  },
+  {
+    "id": "outcome-registry",
+    "slide": 3,
+    "claim": "The current registry contains 11 outcomes: four SCIM-III regressions, five ISNCSCI change regressions, discharge AIS, and length of stay.",
+    "status": "verified",
+    "src": "rehab/src/rehab_sci/models/outcomes.py:8-28",
+    "quote": "Eleven outcomes are currently registered:"
+  },
+  {
+    "id": "patient-group-split",
+    "slide": 3,
+    "claim": "Every outcome uses patient-grouped splitting to prevent multiple episodes from one patient leaking across splits.",
+    "status": "verified",
+    "src": "rehab/src/rehab_sci/models/train.py:17-20",
+    "quote": "prevents leakage when a patient has\n  multiple episodes.  Used for every outcome."
+  },
+  {
+    "id": "conformal-interval",
+    "slide": 3,
+    "claim": "Regression intervals use a 20% development calibration fold and the 80th percentile of absolute residuals.",
+    "status": "verified",
+    "src": "rehab/README.md:144-148",
+    "quote": "20 % of the dev\n  set is held out as a calibration fold; the 80 % PI half-width is the\n  0.80-quantile of `|y − ŷ|` on the modelling scale"
+  },
+  {
+    "id": "dashboard-five-tabs",
+    "slide": 4,
+    "claim": "The dashboard has overview, simulator, patient, insights, and methods tabs.",
+    "status": "verified",
+    "src": "rehab/src/rehab_sci/dashboard/app.py:53-68",
+    "quote": "dcc.Tab(value=\"overview\""
+  },
+  {
+    "id": "bilingual-ui-refresh",
+    "slide": 4,
+    "claim": "A Japanese/English setting rerenders labels, axes, hovers, tab titles, and option lists.",
+    "status": "verified",
+    "src": "rehab/README.md:302-304",
+    "quote": "every label, axis, hover, tab title, and option list rerenders from the\nschema's `ja` / `en` fields."
+  },
+  {
+    "id": "sparse-input-reliability",
+    "slide": 4,
+    "claim": "The simulator reports completeness and out-of-distribution signals separately, while its fixed calibrated interval does not widen as input becomes sparse.",
+    "status": "verified",
+    "src": "rehab/src/rehab_sci/dashboard/reliability.py:3-19",
+    "quote": "The conformal PI half-width is a fixed calibrated scalar, so it does NOT widen\nas input grows sparser."
+  },
+  {
+    "id": "quality-rule-scope",
+    "slide": 5,
+    "claim": "The quality engine checks domain, cross-field, and longitudinal contradictions, and missing prerequisites are not violations.",
+    "status": "verified",
+    "src": "rehab/README.md:190-204",
+    "quote": "Each rule fires only when every field it needs is present and the values\ncontradict, so missing data is never a violation."
+  },
+  {
+    "id": "quality-review-interpretation",
+    "slide": 5,
+    "claim": "Interpretation: aggregate findings are review candidates rather than adjudicated errors, and they do not feed model training.",
+    "status": "inferred",
+    "src": "rehab/README.md:203-209",
+    "quote": "Findings are for data review only and never feed model\ntraining"
+  },
+  {
+    "id": "quality-category-counts",
+    "slide": 5,
+    "claim": "Aggregate quality rules recorded 2,140 findings: domain 1,052, cross-field 798, and longitudinal 290; 417 episodes were flagged.",
+    "status": "verified",
+    "src": "rehab/models/dataquality_summary.json:9-22",
+    "quote": "\"totals\": {\n    \"violations\": 2140,\n    \"by_severity\": {\n      \"error\": 55,\n      \"info\": 999,\n      \"warn\": 1086\n    },\n    \"by_category\": {\n      \"cross_field\": 798,\n      \"domain\": 1052,\n      \"longitudinal\": 290\n    },\n    \"episodes_flagged\": 417\n  }"
+  },
+  {
+    "id": "external-validation-gap",
+    "slide": 6,
+    "claim": "Whether external or prospective validation has been completed requires human confirmation.",
+    "status": "gap"
+  },
+  {
+    "id": "adjudication-gap",
+    "slide": 6,
+    "claim": "The truth and correction status of individual quality flags require review by an authorized human.",
+    "status": "gap"
+  },
+  {
+    "id": "internal-license",
+    "slide": 6,
+    "claim": "The project is internal research code and has no public license at present.",
+    "status": "verified",
+    "src": "rehab/README.md:315-317",
+    "quote": "Internal research code; no public license at this time."
+  }
+]

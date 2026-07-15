@@ -563,26 +563,30 @@ async test "shipped template claim examples satisfy bundle cross-reference" {
 }
 
 ///|
-/// M2.4's promoted live bundle remains a validator-clean acceptance fixture when
-/// its sibling source project is available. Standalone clones skip only the
-/// source-dependent quote checks; the committed bundle itself remains versioned
-/// and its structure is covered by the ordinary deck tests.
-async test "committed spine live bundle passes when its source is available" {
+/// M2.4's promoted live bundles remain validator-clean acceptance fixtures when
+/// their sibling source projects are available. Standalone clones skip only the
+/// source-dependent quote checks; the committed bundles remain versioned and
+/// their structure is covered by the ordinary deck tests.
+async test "committed live bundles pass when their sources are available" {
   guard find_repo_root() is Some(root) else { return }
   let source_base = split_path(root).0
-  guard @fs.exists("\{source_base}/spine-segmentation") else { return }
-  let bundle = "\{root}/decks/spine-segmentation"
-  let report = validate_bundle_dir(
-    bundle,
-    "spine-segmentation",
-    source_base,
-    "\{root}/decks",
-  )
-  json_inspect(report.codes(), content=[])
-  let figures = @fs.read_file("\{bundle}/figures.py").text()
-  assert_true(
-    figures.has_prefix(
-      "# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\n",
-    ),
-  )
+  for project in ["spine-segmentation", "rehab"] {
+    if !@fs.exists("\{source_base}/\{project}") {
+      continue
+    }
+    let bundle = "\{root}/decks/\{project}"
+    let report = validate_bundle_dir(
+      bundle,
+      project,
+      source_base,
+      "\{root}/decks",
+    )
+    json_inspect(report.codes(), content=[])
+    let figures = @fs.read_file("\{bundle}/figures.py").text()
+    assert_true(
+      figures.has_prefix(
+        "# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\n",
+      ),
+    )
+  }
 }

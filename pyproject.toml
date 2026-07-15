@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 [project]
-name = "slide-gen-authoring"
+name = "slide-gen-tools"
 version = "0.1.0"
-description = "Authoring-time helpers for slide-gen"
+description = "Python sidecars for slide-gen authoring and rendering"
 requires-python = ">=3.11"
 dependencies = [
   "fugashi[unidic-lite]==1.5.2",
+  "img2pdf==0.6.3",
 ]
 
 [dependency-groups]

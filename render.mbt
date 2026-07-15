@@ -23,8 +23,8 @@ pub let default_render_timeout_secs : Int = 120
 /// Pure path plan for one named render. `bundle_dir` is committed input;
 /// everything else is derived, ignored output. Browser-only scratch lives
 /// inside the reserved stage and is removed before the closed layout publishes.
-/// The opaque public type is the temporary warning-free seam for M3.2b/M3.2c;
-/// it can become package-private once the production orchestrator consumes it.
+/// The opaque public type supports pure argv/path contracts while keeping its
+/// fields package-owned by the production orchestrator.
 pub struct RenderPlan {
   project : String
   root : String
@@ -67,15 +67,15 @@ pub(all) struct RenderContext {
 }
 
 ///|
-/// M3.2b outcome: either a context safe to begin fixed-page capture or one
-/// deterministic failure. Raster/PDF/publication outcomes land in later units.
+/// Preflight outcome: either a context safe to begin fixed-page capture or one
+/// deterministic failure.
 pub(all) enum RenderPreflightOutcome {
   PreflightReady(RenderContext)
   PreflightFailed(RenderFailure)
 }
 
 ///|
-/// Browser-clean staged rasters handed to M3.3. Paths are one per page in
+/// Browser-clean staged rasters handed to PDF assembly. Paths are one per page in
 /// numeric order; the stage contains exactly those real validated PNG files
 /// when this value is constructed.
 pub(all) struct RenderPages {
@@ -90,6 +90,23 @@ pub(all) struct RenderPages {
 pub(all) enum RenderRasterOutcome {
   RasterReady(RenderPages)
   RasterFailed(RenderFailure)
+}
+
+///|
+/// One completely published render. M3.4's CLI consumes this stable result
+/// without reaching into the opaque path plan.
+pub(all) struct RenderResult {
+  project : String
+  page_count : Int
+  render_dir : String
+  pdf_path : String
+}
+
+///|
+/// Final render outcome after PDF assembly and atomic publication.
+pub(all) enum RenderOutcome {
+  RenderPublished(RenderResult)
+  RenderFailed(RenderFailure)
 }
 
 ///|
@@ -148,7 +165,7 @@ pub fn plan_render(root : String, project : String) -> RenderPlan? {
 
 ///|
 /// Adapt render paths to the shared rollback-safe directory-publication seam.
-/// M3.2b uses only stage recreation; M3.3 will recover/promote these same paths.
+/// Preflight recreates stage; the final orchestrator recovers/promotes all three.
 fn RenderPlan::publication(self : RenderPlan) -> PublicationPaths {
   PublicationPaths::{
     stage: self.stage_dir,
@@ -596,7 +613,7 @@ pub fn expected_render_names(page_count : Int) -> Array[String]? {
 ///|
 /// Exact uv-locked, bounded img2pdf argv. Ordered stage page paths follow the
 /// fixed lossless 72-dpi options; `deck.pdf` is written into the same stage.
-/// M3.3 adds the pinned runtime dependency before this command is executed.
+/// `--project` pins lock discovery to the repo regardless of caller cwd.
 pub fn build_img2pdf_argv(
   plan : RenderPlan,
   page_count : Int,
@@ -609,6 +626,8 @@ pub fn build_img2pdf_argv(
     bounded_render_timeout(timeout_secs).to_string(),
     "uv",
     "run",
+    "--project",
+    plan.root,
     "--locked",
     "--no-dev",
     "img2pdf",
@@ -628,7 +647,7 @@ pub fn build_img2pdf_argv(
 
 ///|
 /// Compare a byte range against one short literal.
-fn png_bytes_equal(data : Bytes, offset : Int, expected : Array[Byte]) -> Bool {
+fn bytes_equal_at(data : Bytes, offset : Int, expected : Array[Byte]) -> Bool {
   guard offset >= 0 && offset + expected.length() <= data.length() else {
     return false
   }
@@ -658,11 +677,11 @@ pub fn validate_page_png(data : Bytes) -> String? {
   if data.length() < 33 {
     return Some("render.png.truncated")
   }
-  if !png_bytes_equal(data, 0, [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+  if !bytes_equal_at(data, 0, [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
     return Some("render.png.signature")
   }
   if png_u32(data, 8) != 13U ||
-    !png_bytes_equal(data, 12, [b'I', b'H', b'D', b'R']) {
+    !bytes_equal_at(data, 12, [b'I', b'H', b'D', b'R']) {
     return Some("render.png.ihdr")
   }
   if png_u32(data, 16) != render_width_px.reinterpret_as_uint() ||
@@ -680,6 +699,20 @@ pub fn validate_page_png(data : Bytes) -> String? {
   }
   if data[28] != 0 {
     return Some("render.png.interlace")
+  }
+  None
+}
+
+///|
+/// Validate the minimal deterministic PDF artifact boundary. The converter
+/// must create a nonempty direct file beginning with `%PDF-`; structural page
+/// and image-stream inspection belongs to the explicit live Poppler gate.
+pub fn validate_pdf_artifact(data : Bytes) -> String? {
+  if data.length() < 5 {
+    return Some("render.pdf.truncated")
+  }
+  if !bytes_equal_at(data, 0, [b'%', b'P', b'D', b'F', b'-']) {
+    return Some("render.pdf.signature")
   }
   None
 }
@@ -948,9 +981,9 @@ async fn capture_render_pages_with(
 }
 
 ///|
-/// Production M3.2c entry: deterministic deck/tool/DOM preflight followed by
-/// sequential fixed-page Chromium capture. Later units consume only the ready
-/// page set; failure performs no PDF or publication work.
+/// Raster-only entry for focused probing: deterministic deck/tool/DOM preflight
+/// followed by sequential fixed-page Chromium capture. Failure performs no PDF
+/// or publication work.
 pub async fn raster_render(
   root : String,
   project : String,
@@ -961,6 +994,292 @@ pub async fn raster_render(
     PreflightReady(context) =>
       capture_render_pages_with(context, run=run_render_command, timeout_secs~)
   }
+}
+
+///|
+/// Construct one stable final-render failure.
+fn final_render_failed(code : String, detail : String) -> RenderOutcome {
+  RenderFailed(RenderFailure::{ code, detail })
+}
+
+///|
+/// Enumerate one real stage/live directory into the pure closed-layout model.
+/// Every child is classified without following a symlink; a disappearing child
+/// therefore becomes non-regular rather than silently escaping validation.
+async fn collect_render_entries(path : String) -> Array[RenderEntry]? {
+  if !is_real_directory_no_follow(path) {
+    return None
+  }
+  let names : Array[String] = try
+    @fs.readdir(path, include_hidden=true, include_special=false)
+  catch {
+    _ => return None
+  } noraise {
+    entries => entries
+  }
+  let entries : Array[RenderEntry] = []
+  for name in names {
+    let regular = try
+      @fs.kind(join_path(path, name), follow_symlink=false)
+    catch {
+      _ => false
+    } noraise {
+      @fs.Regular => true
+      _ => false
+    }
+    entries.push(RenderEntry::{ name, regular })
+  }
+  if !is_real_directory_no_follow(path) {
+    return None
+  }
+  Some(entries)
+}
+
+///|
+/// Project the first blocking pure-layout finding into the final-render error
+/// shape while retaining the complete deterministic report as detail.
+fn render_layout_failure(report : Report) -> RenderFailure {
+  guard report.findings.length() > 0 else {
+    return RenderFailure::{
+      code: "render.layout.invalid",
+      detail: "render layout failed without a finding",
+    }
+  }
+  RenderFailure::{ code: report.findings[0].code, detail: report.render() }
+}
+
+///|
+/// Revalidate every handed-off page path and PNG after each external boundary.
+/// Exact path reconstruction prevents a forged `RenderPages` value from naming
+/// files outside its stage even in white-box/in-process callers.
+async fn validate_render_page_files(pages : RenderPages) -> RenderFailure? {
+  let page_count = pages.paths.length()
+  guard expected_page_names(page_count) is Some(_) else {
+    return Some(RenderFailure::{
+      code: "render.raster.context",
+      detail: "ready raster count is outside the bounded range",
+    })
+  }
+  if !is_real_directory_no_follow(pages.plan.stage_dir) {
+    return Some(RenderFailure::{
+      code: "render.raster.stage",
+      detail: "ready raster stage is not a real directory",
+    })
+  }
+  for index, path in pages.paths {
+    let page = index + 1
+    guard render_page_path(pages.plan, page) is Some(expected) &&
+      path == expected else {
+      return Some(RenderFailure::{
+        code: "render.raster.context",
+        detail: "ready raster page \{page} has a noncanonical path",
+      })
+    }
+    guard read_real_binary_no_follow(path) is Some(data) else {
+      return Some(RenderFailure::{
+        code: "render.raster.output",
+        detail: "ready raster page \{page} is missing, unreadable, non-regular, or a symlink",
+      })
+    }
+    match validate_page_png(data) {
+      Some(code) =>
+        return Some(RenderFailure::{
+          code,
+          detail: "ready raster page \{page} failed the PNG contract",
+        })
+      None => ()
+    }
+  }
+  if !is_real_directory_no_follow(pages.plan.stage_dir) {
+    return Some(RenderFailure::{
+      code: "render.raster.stage",
+      detail: "ready raster stage was swapped during validation",
+    })
+  }
+  None
+}
+
+///|
+/// Require the pre-converter stage to contain exactly the validated page set.
+/// A synthetic regular PDF entry lets the final-layout checker enforce the same
+/// name/type contract without a duplicate page-only implementation.
+async fn validate_ready_render_stage(pages : RenderPages) -> RenderFailure? {
+  match validate_render_page_files(pages) {
+    Some(failure) => return Some(failure)
+    None => ()
+  }
+  guard collect_render_entries(pages.plan.stage_dir) is Some(entries) else {
+    return Some(RenderFailure::{
+      code: "render.raster.layout",
+      detail: "could not enumerate the ready raster stage",
+    })
+  }
+  entries.push(RenderEntry::{ name: "deck.pdf", regular: true })
+  let report = validate_render_layout(entries, pages.paths.length())
+  if !report.ok() {
+    return Some(render_layout_failure(report))
+  }
+  None
+}
+
+///|
+/// Convert a complete browser-clean raster outcome into one closed PDF render
+/// and publish it. The previous live tree is untouched until every process,
+/// artifact, and layout gate passes; the injected publisher is the shared
+/// rollback-safe seam in production and a controlled failure surface in tests.
+async fn complete_render_with(
+  raster : RenderRasterOutcome,
+  run~ : async (Array[String]) -> RenderCommandResult,
+  publish~ : async (PublicationPaths) -> Unit,
+  timeout_secs? : Int = default_render_timeout_secs,
+) -> RenderOutcome {
+  guard raster is RasterReady(pages) else {
+    guard raster is RasterFailed(failure) else {
+      return final_render_failed(
+        "render.raster.outcome", "unrecognized raster outcome",
+      )
+    }
+    return RenderFailed(failure)
+  }
+  match validate_ready_render_stage(pages) {
+    Some(failure) => return RenderFailed(failure)
+    None => ()
+  }
+  let plan = pages.plan
+  let prepare_error : String? = try {
+    remove_entry_no_follow(plan.pdf_path)
+    None
+  } catch {
+    error => Some("\{error}")
+  } noraise {
+    result => result
+  }
+  match prepare_error {
+    Some(error) =>
+      return final_render_failed(
+        "render.pdf.prepare",
+        "could not clear staged PDF output: \{error}",
+      )
+    None => ()
+  }
+  guard build_img2pdf_argv(plan, pages.paths.length(), timeout_secs~)
+    is Some(argv) else {
+    return final_render_failed(
+      "render.pdf.argv", "could not construct the bounded img2pdf command",
+    )
+  }
+  let result = run(argv)
+  if render_command_timed_out(result.code) {
+    return final_render_failed(
+      "render.pdf.timeout", "img2pdf exceeded its bounded runtime",
+    )
+  }
+  if result.code != 0 {
+    return final_render_failed(
+      "render.pdf.exec",
+      "img2pdf failed: \{render_command_detail(result)}",
+    )
+  }
+  match validate_render_page_files(pages) {
+    Some(failure) => return RenderFailed(failure)
+    None => ()
+  }
+  guard read_real_binary_no_follow(plan.pdf_path) is Some(pdf) else {
+    return final_render_failed(
+      "render.pdf.output", "img2pdf output is missing, unreadable, non-regular, or a symlink",
+    )
+  }
+  match validate_pdf_artifact(pdf) {
+    Some(code) =>
+      return final_render_failed(
+        code, "img2pdf output failed the PDF artifact contract",
+      )
+    None => ()
+  }
+  guard collect_render_entries(plan.stage_dir) is Some(entries) else {
+    return final_render_failed(
+      "render.layout.stage", "could not enumerate the complete render stage",
+    )
+  }
+  let layout = validate_render_layout(entries, pages.paths.length())
+  if !layout.ok() {
+    return RenderFailed(render_layout_failure(layout))
+  }
+  let promote_error : String? = try {
+    publish(plan.publication())
+    None
+  } catch {
+    error => Some("\{error}")
+  } noraise {
+    result => result
+  }
+  match promote_error {
+    Some(error) =>
+      return final_render_failed(
+        "render.publication.promote",
+        "render promotion failed: \{error}",
+      )
+    None => ()
+  }
+  let live_pdf = join_path(plan.live_dir, "deck.pdf")
+  guard collect_render_entries(plan.live_dir) is Some(live_entries) &&
+    validate_render_layout(live_entries, pages.paths.length()).ok() &&
+    read_real_binary_no_follow(live_pdf) is Some(live_pdf_data) &&
+    validate_pdf_artifact(live_pdf_data) is None else {
+    return final_render_failed(
+      "render.publication.result", "published render does not match the validated staged artifact set",
+    )
+  }
+  RenderPublished(RenderResult::{
+    project: plan.project,
+    page_count: pages.paths.length(),
+    render_dir: plan.live_dir,
+    pdf_path: live_pdf,
+  })
+}
+
+///|
+/// Production M3.3 entry: recover an interrupted prior render publication,
+/// execute validator/browser/raster/PDF stages, then atomically replace live.
+/// M3.4 adds only named CLI parsing and outcome text around this function.
+pub async fn render_project(
+  root : String,
+  project : String,
+  timeout_secs? : Int = default_render_timeout_secs,
+) -> RenderOutcome {
+  guard plan_render(root, project) is Some(plan) else {
+    return final_render_failed(
+      "render.project", "render project must be a non-dot representable direct-child name under an absolute root",
+    )
+  }
+  let recovery_error : String? = try {
+    recover_publication(plan.publication())
+    None
+  } catch {
+    error => Some("\{error}")
+  } noraise {
+    result => result
+  }
+  match recovery_error {
+    Some(error) =>
+      return final_render_failed(
+        "render.publication.recover",
+        "render recovery failed: \{error}",
+      )
+    None => ()
+  }
+  let raster = match
+    preflight_render_with(plan, run=run_render_command, timeout_secs~) {
+    PreflightFailed(failure) => RasterFailed(failure)
+    PreflightReady(context) =>
+      capture_render_pages_with(context, run=run_render_command, timeout_secs~)
+  }
+  complete_render_with(
+    raster,
+    run=run_render_command,
+    publish=promote_stage,
+    timeout_secs~,
+  )
 }
 
 ///|

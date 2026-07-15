@@ -92,6 +92,18 @@ async fn recover_publication(paths : PublicationPaths) -> Unit {
 }
 
 ///|
+/// Permanently invalidate every restorable public artifact for one publication
+/// key. Recovery first collapses an interrupted prior swap to one live entry;
+/// backup is then cleared before live, so any failure before the final removal
+/// leaves the currently valid public entry in place. Every removal classifies
+/// its leaf without following a symlink.
+async fn invalidate_publication(paths : PublicationPaths) -> Unit {
+  recover_publication(paths)
+  remove_entry_no_follow(paths.backup)
+  remove_entry_no_follow(paths.live)
+}
+
+///|
 /// Replace live while preserving its old entry until stage lands. Live first
 /// moves to the collision-free backup; a failed stage rename restores it before
 /// propagating the error. Successful backup cleanup is best-effort and the next

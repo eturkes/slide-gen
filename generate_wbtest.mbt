@@ -281,6 +281,156 @@ async test "stage_validate_promote safely rebuilds and promotes a passing bundle
 }
 
 ///|
+/// A validated replacement invalidates every restorable old-render slot just
+/// before deck publication. A forged live-render symlink is unlinked at its
+/// own entry; its outside target remains untouched.
+async test "generation invalidates stale render state without following symlinks" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-generate-render-invalidate")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = gen_stub_plan(root)
+    let render_live = "\{root}/renders/\{plan.project}"
+    let render_backup = "\{root}/renders/.previous/\{plan.project}"
+    let outside = "\{root}/outside-render"
+    @fs.mkdir(outside)
+    @fs.write_file(
+      "\{outside}/sentinel",
+      "outside",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.mkdir(split_path(render_live).0, recursive=true)
+    @fs.mkdir(render_backup, recursive=true)
+    @fs.write_file(
+      "\{render_backup}/stale",
+      "backup",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.symlink(render_live, target=outside)
+    async fn produce(p : GenPlan) -> (Int, String, String) {
+      write_gen_stub(p)
+      (0, "", "")
+    }
+
+    let outcome = stage_validate_promote(
+      plan,
+      produce~,
+      postprocess=pass_gen_postprocess,
+      confine=allow_gen_stage,
+    )
+    guard outcome is Promoted(report) else {
+      abort("passing bundle was not promoted after render invalidation")
+    }
+    assert_true(report.ok())
+    assert_true(@fs.exists("\{plan.deck_dir}/deck.html"))
+    assert_false(@fs.exists(render_live))
+    assert_false(@fs.exists(render_backup))
+    assert_eq(@fs.read_file("\{outside}/sentinel").text(), "outside")
+  }
+}
+
+///|
+/// A forged render-home parent makes invalidation fail closed before the deck
+/// rename. The old deck and the outside render target therefore both remain.
+async test "generation stops when stale-render invalidation cannot be confined" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-generate-render-invalidate-fail")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = gen_stub_plan(root)
+    @fs.mkdir(plan.deck_dir, recursive=true)
+    @fs.write_file(
+      "\{plan.deck_dir}/sentinel",
+      "old deck",
+      create_mode=CreateOrTruncate,
+    )
+    let outside = "\{root}/outside-renders"
+    @fs.mkdir("\{outside}/\{plan.project}", recursive=true)
+    @fs.write_file(
+      "\{outside}/\{plan.project}/sentinel",
+      "old render",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.symlink("\{root}/renders", target=outside)
+    async fn produce(p : GenPlan) -> (Int, String, String) {
+      write_gen_stub(p)
+      (0, "", "")
+    }
+
+    let outcome = stage_validate_promote(
+      plan,
+      produce~,
+      postprocess=pass_gen_postprocess,
+      confine=allow_gen_stage,
+      retries=0,
+    )
+    guard outcome is ExecFailed(message) else {
+      abort("unconfined render invalidation did not stop generation")
+    }
+    assert_true(message.has_prefix("render invalidation failed:"))
+    assert_eq(@fs.read_file("\{plan.deck_dir}/sentinel").text(), "old deck")
+    assert_eq(
+      @fs.read_file("\{outside}/\{plan.project}/sentinel").text(),
+      "old render",
+    )
+    assert_true(@fs.exists("\{plan.stage_dir}/deck.html"))
+  }
+}
+
+///|
+/// If deck promotion fails after successful invalidation, the shared deck seam
+/// restores the old deck. The derived render stays absent rather than claiming
+/// freshness for either the rejected candidate or the restored old deck.
+async test "generation keeps stale render absent when later deck promotion rolls back" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-generate-render-promote-fail")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = gen_stub_plan(root)
+    @fs.mkdir(plan.deck_dir, recursive=true)
+    @fs.write_file(
+      "\{plan.deck_dir}/sentinel",
+      "old deck",
+      create_mode=CreateOrTruncate,
+    )
+    let render_live = "\{root}/renders/\{plan.project}"
+    @fs.mkdir(render_live, recursive=true)
+    @fs.write_file(
+      "\{render_live}/sentinel",
+      "old render",
+      create_mode=CreateOrTruncate,
+    )
+    async fn produce(p : GenPlan) -> (Int, String, String) {
+      write_gen_stub(p)
+      (0, "", "")
+    }
+
+    async fn invalidate_then_break_stage(p : GenPlan) -> String? {
+      match invalidate_generated_render(p) {
+        Some(error) => Some(error)
+        None => {
+          remove_entry_no_follow(p.stage_dir)
+          None
+        }
+      }
+    }
+
+    let outcome = stage_validate_promote(
+      plan,
+      produce~,
+      postprocess=pass_gen_postprocess,
+      confine=allow_gen_stage,
+      invalidate=invalidate_then_break_stage,
+      retries=0,
+    )
+    guard outcome is ExecFailed(message) else {
+      abort("missing candidate stage did not fail deck promotion")
+    }
+    assert_true(message.has_prefix("promote failed:"))
+    assert_eq(@fs.read_file("\{plan.deck_dir}/sentinel").text(), "old deck")
+    assert_false(@fs.exists(render_live))
+    assert_false(@fs.exists(plan.backup_dir))
+  }
+}
+
+///|
 /// Publication replacement preserves the old deck until the staged rename
 /// succeeds: a missing stage forces promotion to fail and restores the prior
 /// deck. A saved real deck left by an interrupted two-rename sequence is also

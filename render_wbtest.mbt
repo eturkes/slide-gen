@@ -117,6 +117,78 @@ fn render_raster_failure(outcome : RenderRasterOutcome) -> RenderFailure {
 }
 
 ///|
+/// Unwrap the expected controlled final-render failure branch.
+fn final_render_failure(outcome : RenderOutcome) -> RenderFailure {
+  match outcome {
+    RenderFailed(failure) => failure
+    RenderPublished(_) => abort("expected final render failure")
+  }
+}
+
+///|
+/// Seed the browser-clean page-only stage handed from rasterization to M3.3.
+async fn ready_render_pages(plan : RenderPlan, page_count : Int) -> RenderPages {
+  recreate_stage(plan.publication())
+  let paths : Array[String] = []
+  for page in 1..<=page_count {
+    guard render_page_path(plan, page) is Some(path) else {
+      abort("missing ready page path")
+    }
+    @fs.write_file(path, valid_png_header(), create_mode=CreateOrTruncate)
+    paths.push(path)
+  }
+  RenderPages::{ plan, paths }
+}
+
+///|
+/// Seed the prior published render that every failing completion path must keep.
+async fn seed_old_render(plan : RenderPlan) -> String {
+  @fs.mkdir(plan.live_dir, recursive=true)
+  let sentinel = "\{plan.live_dir}/sentinel"
+  @fs.write_file(sentinel, "old", create_mode=CreateOrTruncate)
+  sentinel
+}
+
+///|
+/// Split one Poppler output line without depending on its aligned spacing.
+fn whitespace_fields(line : String) -> Array[String] {
+  let fields : Array[String] = []
+  for field in line.split(" ") {
+    if !field.is_empty() {
+      fields.push(field.to_owned())
+    }
+  }
+  fields
+}
+
+///|
+/// Parse Poppler's whitespace table into only numbered image rows. Header and
+/// separator lines remain ignored without pinning column spacing.
+fn poppler_image_rows(output : String) -> Array[Array[String]] {
+  let rows : Array[Array[String]] = []
+  for line in output.split("\n") {
+    let fields = whitespace_fields(line.to_owned())
+    if fields.length() >= 14 && parse_int(fields[0]) is Some(_) {
+      rows.push(fields)
+    }
+  }
+  rows
+}
+
+///|
+/// Parse every per-page MediaBox row from `pdfinfo -box` output.
+fn poppler_media_boxes(output : String) -> Array[Array[String]] {
+  let rows : Array[Array[String]] = []
+  for line in output.split("\n") {
+    let fields = whitespace_fields(line.to_owned())
+    if fields.length() >= 7 && fields[0] == "Page" && fields[2] == "MediaBox:" {
+      rows.push(fields)
+    }
+  }
+  rows
+}
+
+///|
 /// The direct-child policy rejects traversal/reserved dot names and the shared
 /// unrepresentable classes while retaining ordinary internal punctuation,
 /// spaces, quotes, and non-ASCII.
@@ -802,14 +874,130 @@ async test "live Chromium raster repeats rehab byte identically" {
 }
 
 ///|
+/// Explicit live PDF gate over a disposable two-page bundle under the real repo
+/// root, so uv resolves the exact tracked project/lock used by production.
+async test "live rendered PDF preserves pages and lossless image streams" {
+  guard @env.get_env_var("SLIDE_GEN_RENDER_PDF_LIVE") is Some(_) else { return }
+  guard find_repo_root() is Some(root) else {
+    abort("live PDF probe could not find the slide-gen root")
+  }
+  let project = "m3-pdf-live-probe"
+  let plan = test_render_plan(root, project)
+  for path in [plan.bundle_dir, plan.stage_dir, plan.backup_dir, plan.live_dir] {
+    if @fs.exists(path) {
+      abort("live PDF probe refuses to replace existing path: \{path}")
+    }
+  }
+  @async.with_task_group() <| group => {
+    group.add_defer(() => remove_entry_no_follow(plan.bundle_dir))
+    group.add_defer(() => remove_entry_no_follow(plan.stage_dir))
+    group.add_defer(() => remove_entry_no_follow(plan.backup_dir))
+    group.add_defer(() => remove_entry_no_follow(plan.live_dir))
+    write_render_test_deck(plan, render_test_deck(project, 2))
+    let first = render_project(root, project)
+    guard first is RenderPublished(result) else {
+      guard first is RenderFailed(failure) else {
+        abort("unreachable live PDF outcome")
+      }
+      abort("live PDF render failed: \{failure.code}: \{failure.detail}")
+    }
+    let first_pdf = @fs.read_file(result.pdf_path).binary()
+    let first_pages : Array[Bytes] = []
+    for page in 1..<=result.page_count {
+      guard render_page_name(page) is Some(name) else {
+        abort("live PDF probe could not construct a page name")
+      }
+      first_pages.push(@fs.read_file("\{result.render_dir}/\{name}").binary())
+    }
+    assert_true(first_pages[0] != first_pages[1])
+    let info = run_render_command([
+      "timeout",
+      "--kill-after=5",
+      "30",
+      "env",
+      "LC_ALL=C",
+      "pdfinfo",
+      "-f",
+      "1",
+      "-l",
+      "2",
+      "-box",
+      result.pdf_path,
+    ])
+    let images = run_render_command([
+      "timeout",
+      "--kill-after=5",
+      "30",
+      "env",
+      "LC_ALL=C",
+      "pdfimages",
+      "-list",
+      result.pdf_path,
+    ])
+    assert_eq(info.code, 0)
+    assert_true(info.stdout.contains("Producer:        img2pdf 0.6.3\n"))
+    assert_true(info.stdout.contains("Pages:           2\n"))
+    assert_false(info.stdout.contains("CreationDate:"))
+    assert_false(info.stdout.contains("ModDate:"))
+    let media_boxes = poppler_media_boxes(info.stdout)
+    assert_eq(media_boxes.length(), 2)
+    for index, box in media_boxes {
+      assert_eq(box[1], (index + 1).to_string())
+      assert_eq(box[3], "0.00")
+      assert_eq(box[4], "0.00")
+      assert_eq(box[5], "2560.00")
+      assert_eq(box[6], "1440.00")
+    }
+    assert_eq(images.code, 0)
+    let rows = poppler_image_rows(images.stdout)
+    assert_eq(rows.length(), 2)
+    for index, row in rows {
+      assert_eq(row[0], (index + 1).to_string())
+      assert_eq(row[1], index.to_string())
+      assert_eq(row[2], "image")
+      assert_eq(row[3], "2560")
+      assert_eq(row[4], "1440")
+      assert_eq(row[5], "rgb")
+      assert_eq(row[6], "3")
+      assert_eq(row[7], "8")
+      assert_eq(row[8], "image")
+      assert_eq(row[9], "no")
+      assert_eq(row[12], "72")
+      assert_eq(row[13], "72")
+    }
+
+    let second = render_project(root, project)
+    guard second is RenderPublished(repeated) else {
+      guard second is RenderFailed(failure) else {
+        abort("unreachable repeated live PDF outcome")
+      }
+      abort(
+        "repeated live PDF render failed: \{failure.code}: \{failure.detail}",
+      )
+    }
+    assert_eq(repeated.page_count, 2)
+    assert_true(@fs.read_file(repeated.pdf_path).binary() == first_pdf)
+    for page in 1..<=repeated.page_count {
+      guard render_page_name(page) is Some(name) else {
+        abort("repeated live PDF probe could not construct a page name")
+      }
+      assert_true(
+        @fs.read_file("\{repeated.render_dir}/\{name}").binary() ==
+        first_pages[page - 1],
+      )
+    }
+  }
+}
+
+///|
 /// img2pdf receives the lossless deterministic options before numerically
 /// ordered page paths and writes only the stage PDF.
 test "img2pdf argv preserves page order and 72-dpi lossless options" {
   let plan = test_render_plan("/", "project")
   json_inspect(build_img2pdf_argv(plan, 3, timeout_secs=90).unwrap_or([]), content=[
-    "timeout", "--kill-after=30", "90", "uv", "run", "--locked", "--no-dev", "img2pdf",
-    "--nodate", "--engine=internal", "--imgsize=72dpi", "--rotation=none", "--output",
-    "/renders/.partial/project/deck.pdf", "/renders/.partial/project/page_01.png",
+    "timeout", "--kill-after=30", "90", "uv", "run", "--project", "/", "--locked",
+    "--no-dev", "img2pdf", "--nodate", "--engine=internal", "--imgsize=72dpi", "--rotation=none",
+    "--output", "/renders/.partial/project/deck.pdf", "/renders/.partial/project/page_01.png",
     "/renders/.partial/project/page_02.png", "/renders/.partial/project/page_03.png",
   ])
   assert_true(build_img2pdf_argv(plan, 0) is None)
@@ -912,4 +1100,320 @@ test "closed staged render layout rejects every non-artifact entry class" {
   json_inspect(validate_render_layout([], 0).codes(), content=[
     "render.layout.page_count",
   ])
+}
+
+///|
+/// The final artifact gate requires a nonempty direct file beginning exactly
+/// with the PDF header marker; container parsing remains pdfinfo's live job.
+test "PDF artifact prefix rejects truncation and false signatures" {
+  inspect(
+    validate_pdf_artifact(Bytes::from_array([])).unwrap_or("ok"),
+    content="render.pdf.truncated",
+  )
+  inspect(
+    validate_pdf_artifact(Bytes::from_array([b'%', b'P', b'D', b'F'])).unwrap_or(
+      "ok",
+    ),
+    content="render.pdf.truncated",
+  )
+  inspect(
+    validate_pdf_artifact(Bytes::from_array([b'P', b'D', b'F', b'-', b'!'])).unwrap_or(
+      "ok",
+    ),
+    content="render.pdf.signature",
+  )
+  assert_true(
+    validate_pdf_artifact(
+      Bytes::from_array([b'%', b'P', b'D', b'F', b'-', b'1', b'.', b'7']),
+    )
+    is None,
+  )
+}
+
+///|
+/// A fake zero-exit converter receives the exact locked argv, then the complete
+/// closed stage atomically replaces an old live render through the shared seam.
+async test "PDF completion publishes an exact render atomically" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-render-publish-good")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = test_render_plan(root, "project")
+    let pages = ready_render_pages(plan, 2)
+    let sentinel = seed_old_render(plan)
+    let calls : Array[Array[String]] = []
+    async fn convert(argv : Array[String]) -> RenderCommandResult {
+      calls.push(argv)
+      @fs.write_file(plan.pdf_path, "%PDF-1.7\n", create_mode=CreateOrTruncate)
+      render_command_result(0)
+    }
+
+    let outcome = complete_render_with(
+      RasterReady(pages),
+      run=convert,
+      publish=promote_stage,
+      timeout_secs=17,
+    )
+    guard outcome is RenderPublished(result) else {
+      abort("passing fake PDF did not publish")
+    }
+    assert_eq(result.project, "project")
+    assert_eq(result.page_count, 2)
+    assert_eq(result.render_dir, plan.live_dir)
+    assert_eq(result.pdf_path, "\{plan.live_dir}/deck.pdf")
+    assert_eq(calls.length(), 1)
+    assert_eq(calls[0][2], "17")
+    assert_eq(calls[0][6], root)
+    assert_false(@fs.exists(sentinel))
+    assert_false(@fs.exists(plan.stage_dir))
+    assert_false(@fs.exists(plan.backup_dir))
+    assert_true(@fs.exists("\{plan.live_dir}/page_01.png"))
+    assert_true(@fs.exists("\{plan.live_dir}/page_02.png"))
+    assert_eq(@fs.read_file(result.pdf_path).text(), "%PDF-1.7\n")
+  }
+}
+
+///|
+/// The production entry restores an interrupted old-render backup before even
+/// checking deck input. A deterministic missing-deck failure therefore cannot
+/// strand the previously complete render in the reserved backup slot.
+async test "render project recovers interrupted publication before preflight" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-render-recover-entry")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = test_render_plan(root, "project")
+    @fs.mkdir(plan.backup_dir, recursive=true)
+    @fs.write_file(
+      "\{plan.backup_dir}/sentinel",
+      "old",
+      create_mode=CreateOrTruncate,
+    )
+    let failure = final_render_failure(render_project(root, "project"))
+    assert_eq(failure.code, "render.deck.directory")
+    assert_eq(@fs.read_file("\{plan.live_dir}/sentinel").text(), "old")
+    assert_false(@fs.exists(plan.backup_dir))
+  }
+}
+
+///|
+/// Capture, timeout, nonzero converter, missing output, and forged-output
+/// failures all stop before publication and retain the previous live render.
+async test "render completion preserves old live across capture and PDF failures" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-render-publish-pdf-fail")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+
+    let capture_plan = test_render_plan(root, "capture")
+    let capture_sentinel = seed_old_render(capture_plan)
+    let mut capture_calls = 0
+    async fn should_not_convert(_ : Array[String]) -> RenderCommandResult {
+      ignore(@fs.exists(capture_plan.live_dir))
+      capture_calls = capture_calls + 1
+      render_command_result(0)
+    }
+
+    let capture_failure = final_render_failure(
+      complete_render_with(
+        RasterFailed(RenderFailure::{
+          code: "render.raster.exec",
+          detail: "controlled",
+        }),
+        run=should_not_convert,
+        publish=promote_stage,
+      ),
+    )
+    assert_eq(capture_failure.code, "render.raster.exec")
+    assert_eq(capture_calls, 0)
+    assert_eq(@fs.read_file(capture_sentinel).text(), "old")
+
+    let timeout_plan = test_render_plan(root, "timeout")
+    let timeout_pages = ready_render_pages(timeout_plan, 1)
+    let timeout_sentinel = seed_old_render(timeout_plan)
+    async fn timeout_convert(argv : Array[String]) -> RenderCommandResult {
+      ignore(@fs.exists(argv[0]))
+      render_command_result(137)
+    }
+
+    let timeout_failure = final_render_failure(
+      complete_render_with(
+        RasterReady(timeout_pages),
+        run=timeout_convert,
+        publish=promote_stage,
+      ),
+    )
+    assert_eq(timeout_failure.code, "render.pdf.timeout")
+    assert_eq(@fs.read_file(timeout_sentinel).text(), "old")
+
+    let exec_plan = test_render_plan(root, "exec")
+    let exec_pages = ready_render_pages(exec_plan, 1)
+    let exec_sentinel = seed_old_render(exec_plan)
+    async fn failed_convert(argv : Array[String]) -> RenderCommandResult {
+      ignore(@fs.exists(argv[0]))
+      render_command_result(8, stderr="controlled converter failure")
+    }
+
+    let exec_failure = final_render_failure(
+      complete_render_with(
+        RasterReady(exec_pages),
+        run=failed_convert,
+        publish=promote_stage,
+      ),
+    )
+    assert_eq(exec_failure.code, "render.pdf.exec")
+    assert_true(exec_failure.detail.contains("controlled converter failure"))
+    assert_eq(@fs.read_file(exec_sentinel).text(), "old")
+
+    let missing_plan = test_render_plan(root, "missing")
+    let missing_pages = ready_render_pages(missing_plan, 1)
+    let missing_sentinel = seed_old_render(missing_plan)
+    async fn missing_convert(argv : Array[String]) -> RenderCommandResult {
+      ignore(@fs.exists(argv[0]))
+      render_command_result(0)
+    }
+
+    let missing_failure = final_render_failure(
+      complete_render_with(
+        RasterReady(missing_pages),
+        run=missing_convert,
+        publish=promote_stage,
+      ),
+    )
+    assert_eq(missing_failure.code, "render.pdf.output")
+    assert_eq(@fs.read_file(missing_sentinel).text(), "old")
+
+    let malformed_plan = test_render_plan(root, "malformed")
+    let malformed_pages = ready_render_pages(malformed_plan, 1)
+    let malformed_sentinel = seed_old_render(malformed_plan)
+    async fn malformed_convert(_ : Array[String]) -> RenderCommandResult {
+      @fs.write_file(
+        malformed_plan.pdf_path,
+        "not a PDF",
+        create_mode=CreateOrTruncate,
+      )
+      render_command_result(0)
+    }
+
+    let malformed_failure = final_render_failure(
+      complete_render_with(
+        RasterReady(malformed_pages),
+        run=malformed_convert,
+        publish=promote_stage,
+      ),
+    )
+    assert_eq(malformed_failure.code, "render.pdf.signature")
+    assert_eq(@fs.read_file(malformed_sentinel).text(), "old")
+
+    let linked_plan = test_render_plan(root, "linked")
+    let linked_pages = ready_render_pages(linked_plan, 1)
+    let linked_sentinel = seed_old_render(linked_plan)
+    let outside = "\{root}/outside.pdf"
+    @fs.write_file(outside, "%PDF-1.7\n", create_mode=CreateOrTruncate)
+    async fn linked_convert(_ : Array[String]) -> RenderCommandResult {
+      @fs.symlink(linked_plan.pdf_path, target=outside)
+      render_command_result(0)
+    }
+
+    let linked_failure = final_render_failure(
+      complete_render_with(
+        RasterReady(linked_pages),
+        run=linked_convert,
+        publish=promote_stage,
+      ),
+    )
+    assert_eq(linked_failure.code, "render.pdf.output")
+    assert_eq(@fs.read_file(linked_sentinel).text(), "old")
+    assert_eq(@fs.read_file(outside).text(), "%PDF-1.7\n")
+  }
+}
+
+///|
+/// Converter-created junk and a failed stage rename are both non-publication
+/// outcomes. The shared promotion seam restores the old render after moving it
+/// aside, while the failed candidate stays absent from live.
+async test "render completion preserves old live on layout and promote failure" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-render-publish-final-fail")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+
+    let layout_plan = test_render_plan(root, "layout")
+    let layout_pages = ready_render_pages(layout_plan, 1)
+    let layout_sentinel = seed_old_render(layout_plan)
+    async fn dirty_convert(_ : Array[String]) -> RenderCommandResult {
+      @fs.write_file(
+        layout_plan.pdf_path,
+        "%PDF-1.7\n",
+        create_mode=CreateOrTruncate,
+      )
+      @fs.write_file(
+        "\{layout_plan.stage_dir}/junk",
+        "junk",
+        create_mode=CreateOrTruncate,
+      )
+      render_command_result(0)
+    }
+
+    let layout_failure = final_render_failure(
+      complete_render_with(
+        RasterReady(layout_pages),
+        run=dirty_convert,
+        publish=promote_stage,
+      ),
+    )
+    assert_eq(layout_failure.code, "render.layout.unexpected")
+    assert_eq(@fs.read_file(layout_sentinel).text(), "old")
+
+    let mutated_plan = test_render_plan(root, "mutated")
+    let mutated_pages = ready_render_pages(mutated_plan, 1)
+    let mutated_sentinel = seed_old_render(mutated_plan)
+    async fn mutating_convert(_ : Array[String]) -> RenderCommandResult {
+      @fs.write_file(
+        mutated_plan.pdf_path,
+        "%PDF-1.7\n",
+        create_mode=CreateOrTruncate,
+      )
+      @fs.write_file(
+        mutated_pages.paths[0],
+        "not a PNG",
+        create_mode=CreateOrTruncate,
+      )
+      render_command_result(0)
+    }
+
+    let mutated_failure = final_render_failure(
+      complete_render_with(
+        RasterReady(mutated_pages),
+        run=mutating_convert,
+        publish=promote_stage,
+      ),
+    )
+    assert_eq(mutated_failure.code, "render.png.truncated")
+    assert_eq(@fs.read_file(mutated_sentinel).text(), "old")
+
+    let promote_plan = test_render_plan(root, "promote")
+    let promote_pages = ready_render_pages(promote_plan, 1)
+    let promote_sentinel = seed_old_render(promote_plan)
+    async fn good_convert(_ : Array[String]) -> RenderCommandResult {
+      @fs.write_file(
+        promote_plan.pdf_path,
+        "%PDF-1.7\n",
+        create_mode=CreateOrTruncate,
+      )
+      render_command_result(0)
+    }
+
+    async fn break_publish(paths : PublicationPaths) -> Unit {
+      remove_entry_no_follow(paths.stage)
+      promote_stage(paths)
+    }
+
+    let promote_failure = final_render_failure(
+      complete_render_with(
+        RasterReady(promote_pages),
+        run=good_convert,
+        publish=break_publish,
+      ),
+    )
+    assert_eq(promote_failure.code, "render.publication.promote")
+    assert_eq(@fs.read_file(promote_sentinel).text(), "old")
+    assert_false(@fs.exists(promote_plan.backup_dir))
+  }
 }

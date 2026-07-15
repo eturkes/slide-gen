@@ -111,6 +111,18 @@ fn GenPlan::publication(self : GenPlan) -> PublicationPaths {
 }
 
 ///|
+/// Derived render publication keyed to the same project. A freshly generated
+/// deck must invalidate both its live render and any restart-restorable backup
+/// immediately before the deck itself publishes.
+fn GenPlan::render_publication(self : GenPlan) -> PublicationPaths {
+  PublicationPaths::{
+    stage: join_path(self.root, "renders/.partial/\{self.project}"),
+    backup: join_path(self.root, "renders/.previous/\{self.project}"),
+    live: join_path(self.root, "renders/\{self.project}"),
+  }
+}
+
+///|
 /// Join a directory `base` and a relative `child` with a single separator:
 /// trailing slashes on `base` are stripped and the filesystem-root `/` is
 /// special-cased, so no join ever produces a `//`. Keeps every derived plan path
@@ -294,6 +306,18 @@ async fn check_tracked_confinement(
 }
 
 ///|
+/// Invalidate every public/restorable render for the generated project without
+/// following a forged leaf. Errors are data so the generation orchestrator can
+/// fail before moving the validated deck stage.
+async fn invalidate_generated_render(plan : GenPlan) -> String? {
+  try invalidate_publication(plan.render_publication()) catch {
+    error => Some("\{error}")
+  } noraise {
+    _ => None
+  }
+}
+
+///|
 /// Run a producer into a fresh stage, tripwire + validate its raw output, run
 /// the authoring-time postprocessor, then tripwire + validate again before
 /// publishing. The pre-pass preserves precise partial-output diagnostics and
@@ -301,12 +325,15 @@ async fn check_tracked_confinement(
 /// covers the sidecar's writes. Producer/postprocessor exits and blocking
 /// reports consume the retry budget; a confinement finding is immediately
 /// terminal because an out-of-bundle write has already occurred. Failed or
-/// retained stages remain available for inspection.
+/// retained stages remain available for inspection. A passing final stage
+/// invalidates every restorable render for the project immediately before its
+/// deck publication rename.
 async fn stage_validate_promote(
   plan : GenPlan,
   produce~ : async (GenPlan) -> (Int, String, String),
   postprocess~ : async (GenPlan) -> (Int, String),
   confine~ : async (GenPlan) -> String?,
+  invalidate? : async (GenPlan) -> String? = invalidate_generated_render,
   retries? : Int = 1,
 ) -> GenOutcome {
   let publication = plan.publication()
@@ -369,6 +396,10 @@ async fn stage_validate_promote(
     }
     if !is_real_directory_no_follow(plan.stage_dir) {
       return ExecFailed("stage root is not a directory")
+    }
+    match invalidate(plan) {
+      Some(error) => return ExecFailed("render invalidation failed: \{error}")
+      None => ()
     }
     let promote_error : String? = try promote_stage(publication) catch {
       error => Some("\{error}")

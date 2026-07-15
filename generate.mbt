@@ -14,13 +14,27 @@ pub let default_timeout_secs : Int = 1800
 /// `source_dir` is the project being documented; `template` is the style
 /// contract; `stage_dir` is the temporary bundle codex writes into; `deck_dir`
 /// is the committed home the staged bundle is promoted to once it validates.
-priv struct GenPlan {
+/// The type is public for the injected orchestration seam; its fields remain
+/// package-private.
+pub struct GenPlan {
   project : String
   cwd : String
   source_dir : String
   template : String
   stage_dir : String
   deck_dir : String
+}
+
+///|
+/// Result of one staged generation: a validator-passing bundle was promoted, a
+/// blocking validator report was retained at the stage for inspection, or the
+/// producer/confinement/promotion path failed before publication. `Promoted`
+/// carries its passing report because advisory findings remain visible even
+/// though they do not block publication.
+pub(all) enum GenOutcome {
+  Promoted(Report)
+  Retained(Report)
+  ExecFailed(String)
 }
 
 ///|
@@ -60,6 +74,99 @@ fn join_path(base : String, child : String) -> String {
   } else {
     "\{b}/\{child}"
   }
+}
+
+///|
+/// Remove one filesystem entry without ever recursively traversing a symlink at
+/// its root. A real directory is removed recursively; files, symlinks, and other
+/// non-directory entries are unlinked. A missing entry is already clean.
+async fn remove_entry_no_follow(path : String) -> Unit {
+  let entry_kind = try @fs.kind(path, follow_symlink=false) catch {
+    _ => None
+  } noraise {
+    kind => Some(kind)
+  }
+  match entry_kind {
+    None => ()
+    Some(@fs.Directory) => @fs.rmdir(path, recursive=true)
+    Some(_) => @fs.remove(path)
+  }
+}
+
+///|
+/// Recreate the reserved stage as an empty real directory. The no-follow removal
+/// prevents a stale or swapped stage-root symlink from turning recursive cleanup
+/// into deletion of its target.
+async fn recreate_stage(plan : GenPlan) -> Unit {
+  remove_entry_no_follow(plan.stage_dir)
+  @fs.mkdir(plan.stage_dir, recursive=true)
+}
+
+///|
+/// Replace any published deck with the validated stage, applying the same
+/// no-follow removal rule to an unexpected destination entry before rename.
+async fn promote_stage(plan : GenPlan) -> Unit {
+  remove_entry_no_follow(plan.deck_dir)
+  @fs.rename(plan.stage_dir, plan.deck_dir)
+}
+
+///|
+/// Run a producer into a fresh stage, apply its post-run confinement tripwire,
+/// validate the whole bundle, and publish only a passing report. Producer exits
+/// and blocking validation reports consume the retry budget; a confinement
+/// finding is immediately terminal because an out-of-bundle write has already
+/// occurred. Failed or retained stages remain available for inspection.
+pub async fn stage_validate_promote(
+  plan : GenPlan,
+  produce~ : async (GenPlan) -> (Int, String, String),
+  confine~ : async (GenPlan) -> String?,
+  retries? : Int = 1,
+) -> GenOutcome {
+  let retry_count = if retries < 0 { 0 } else { retries }
+  let mut last : GenOutcome = ExecFailed("generation did not run")
+  for _ in 0..<(retry_count + 1) {
+    recreate_stage(plan)
+    let (code, _, stderr) = produce(plan)
+    if code != 0 {
+      last = ExecFailed(stderr)
+      continue
+    }
+    match confine(plan) {
+      Some(offenders) => return ExecFailed("write escaped bundle: \{offenders}")
+      None => ()
+    }
+    let report = validate_bundle_dir(
+      plan.stage_dir,
+      plan.project,
+      plan.cwd,
+      split_path(plan.deck_dir).0,
+    )
+    if !report.ok() {
+      last = Retained(report)
+      continue
+    }
+    let stage_is_directory = try
+      @fs.kind(plan.stage_dir, follow_symlink=false)
+    catch {
+      _ => false
+    } noraise {
+      @fs.Directory => true
+      _ => false
+    }
+    if !stage_is_directory {
+      return ExecFailed("stage root is not a directory")
+    }
+    let promote_error : String? = try promote_stage(plan) catch {
+      error => Some("\{error}")
+    } noraise {
+      _ => None
+    }
+    match promote_error {
+      Some(error) => return ExecFailed("promote failed: \{error}")
+      None => return Promoted(report)
+    }
+  }
+  last
 }
 
 ///|

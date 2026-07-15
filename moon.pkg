@@ -12,4 +12,8 @@ import {
   "moonbitlang/core/quickcheck/splitmix",
 } for "test"
 
+import {
+  "moonbitlang/async",
+} for "wbtest"
+
 supported_targets = "+native"

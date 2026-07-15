@@ -124,6 +124,62 @@ async test "validate_bundle_dir over seeded bundles" {
 }
 
 ///|
+/// deck.html is the bundle's first hard gate: absent, empty, non-regular, and
+/// symlink entries all return the single `deck.missing` report instead of raising
+/// while reading or following the path.
+async test "validate_bundle_dir guards unusable deck entries" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-prov-deck")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let missing = make_bundle(
+      root,
+      "missing",
+      None,
+      Some("[]"),
+      Some("no gaps\n"),
+    )
+    json_inspect(validate_bundle_dir(missing, "project", root, root).codes(), content=[
+      "deck.missing",
+    ])
+    let empty = make_bundle(
+      root,
+      "empty",
+      Some(""),
+      Some("[]"),
+      Some("no gaps\n"),
+    )
+    json_inspect(validate_bundle_dir(empty, "project", root, root).codes(), content=[
+      "deck.missing",
+    ])
+    let directory = make_bundle(
+      root,
+      "directory",
+      None,
+      Some("[]"),
+      Some("no gaps\n"),
+    )
+    @fs.mkdir("\{directory}/deck.html")
+    json_inspect(
+      validate_bundle_dir(directory, "project", root, root).codes(),
+      content=["deck.missing"],
+    )
+    let target = "\{root}/target.html"
+    @fs.write_file(target, envelope(), create_mode=CreateOrTruncate)
+    let symlink = make_bundle(
+      root,
+      "symlink",
+      None,
+      Some("[]"),
+      Some("no gaps\n"),
+    )
+    @fs.symlink("\{symlink}/deck.html", target~)
+    json_inspect(validate_bundle_dir(symlink, "project", root, root).codes(), content=[
+      "deck.missing",
+    ])
+  }
+}
+
+///|
 /// A one-row provenance array citing `src` with `quote` at the given `status`,
 /// for the source-check bundle tests.
 fn prov_one(status : String, src : String, quote : String) -> String {

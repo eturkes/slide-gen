@@ -552,24 +552,54 @@ fn check_deck_crossref(
 }
 
 ///|
+/// The single blocking report for an unusable deck entry.
+fn missing_deck_report() -> Report {
+  Report::{
+    findings: [
+      must(
+        "deck.missing", "deck.html missing, empty, non-regular, or a symlink",
+      ),
+    ],
+  }
+}
+
+///|
 /// Validate a whole deck bundle rooted at `bundle_dir`, accumulating every
 /// finding into one `Report`: the deck itself (envelope, slide-structure,
 /// slide-text, entry/furigana, and image contract via `validate_deck`), its
 /// `provenance.json` schema, its `gaps.md` disclosure, and the deck-to-provenance
 /// cross-reference (every deck `data-claim` names a schema-valid row). A missing
 /// `provenance.json` or `gaps.md` is itself a `Must` finding (`prov.missing` /
-/// `gaps.missing`) — a bundle must ship both. `src_base` is the root the
-/// provenance source paths resolve against; `deck_home` is the whole generated
-/// decks tree, which no row may cite. The per-row source and quote checks read
-/// only lexically confined files under `src_base`. Raises if `deck.html` is
-/// unreadable.
+/// `gaps.missing`) — a bundle must ship both. A missing, empty, non-regular, or
+/// symlink `deck.html` returns the blocking `deck.missing` report before any read.
+/// `src_base` is the root the provenance source paths resolve against;
+/// `deck_home` is the whole generated decks tree, which no row may cite. The
+/// per-row source and quote checks read only lexically confined files under
+/// `src_base`.
 pub async fn validate_bundle_dir(
   bundle_dir : String,
   slug : String,
   src_base : String,
   deck_home : String,
 ) -> Report {
-  let html = @fs.read_file("\{bundle_dir}/deck.html").text()
+  let deck_path = "\{bundle_dir}/deck.html"
+  let deck_is_regular = if !@fs.exists(deck_path) {
+    false
+  } else {
+    try @fs.kind(deck_path, follow_symlink=false) catch {
+      _ => false
+    } noraise {
+      @fs.Regular => true
+      _ => false
+    }
+  }
+  guard deck_is_regular else { return missing_deck_report() }
+  let html = try @fs.read_file(deck_path).text() catch {
+    _ => ""
+  } noraise {
+    text => text
+  }
+  guard html.length() > 0 else { return missing_deck_report() }
   let assets = list_assets(bundle_dir)
   let out = validate_deck(html, slug, assets)
   let prov_path = "\{bundle_dir}/provenance.json"

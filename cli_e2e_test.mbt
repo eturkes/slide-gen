@@ -146,11 +146,21 @@ async test "generate dry-run end-to-end" {
     let projects_dir = "\{tmp}/Projects"
     @fs.mkdir(projects_dir)
     let repo = "\{projects_dir}/slide-gen"
-    @fs.mkdir(repo)
+    @fs.mkdir("\{repo}/templates", recursive=true)
     @fs.mkdir("\{projects_dir}/projA")
     @fs.write_file(
       "\{repo}/moon.mod",
       "name = \"eturkes/slide-gen\"\n",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
+      "\{repo}/templates/deck-prompt.md",
+      "RUNTIME PROMPT MARKER\n",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
+      "\{repo}/templates/deck.html",
+      "<html>RUNTIME STYLE MARKER</html>\n",
       create_mode=CreateOrTruncate,
     )
 
@@ -166,6 +176,8 @@ async test "generate dry-run end-to-end" {
     assert_true(text.contains("--dangerously-bypass-approvals-and-sandbox"))
     assert_true(text.contains("decks/.partial/projA"))
     assert_true(text.contains("--- prompt (stdin) ---"))
+    assert_true(text.contains("RUNTIME PROMPT MARKER"))
+    assert_true(text.contains("RUNTIME STYLE MARKER"))
     // `print` (not `println`) the renderer -> exactly one trailing newline, with
     // no blank final line doubling the renderer's own.
     assert_false(text.has_suffix("\n\n"))
@@ -186,7 +198,8 @@ async test "generate dry-run end-to-end" {
 /// built-binary gate must both be present; ordinary moon test and just test runs
 /// return before setup. A tiny synthetic sibling project plus the shipped style
 /// contract keeps this about plumbing: Codex must exit through the harness and
-/// leave a non-empty deck.html in either the promoted or retained bundle.
+/// leave a non-empty deck.html in either the promoted or retained bundle. The
+/// fixture copies both runtime-loaded contracts used by the production binary.
 async test "generate live codex smoke" {
   guard @env.get_env_var("SLIDE_GEN_LIVE") is Some(_) else { return }
   guard @env.get_env_var("SLIDE_GEN_BIN") is Some(bin) else { return }
@@ -194,6 +207,7 @@ async test "generate live codex smoke" {
     abort("live smoke could not find the source slide-gen root")
   }
   let template = @fs.read_file("\{source_root}/templates/deck.html").text()
+  let prompt = @fs.read_file("\{source_root}/templates/deck-prompt.md").text()
   @async.with_task_group() <| group => {
     let tmp = @fs.tmpdir(prefix="slide-gen-live")
     group.add_defer(() => @fs.rmdir(tmp, recursive=true))
@@ -213,6 +227,11 @@ async test "generate live codex smoke" {
       create_mode=CreateOrTruncate,
     )
     @fs.write_file(
+      "\{repo}/templates/deck-prompt.md",
+      prompt,
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
       "\{source}/README.md",
       "# projA\n\nPurpose: a tiny fixture project for the slide generation smoke.\n",
       create_mode=CreateOrTruncate,
@@ -225,7 +244,7 @@ async test "generate live codex smoke" {
     assert_eq(init_code, 0, msg=init_err.text())
     let (add_code, _, add_err) = @process.collect_output(
       "git",
-      ["add", "moon.mod", "templates/deck.html"],
+      ["add", "moon.mod", "templates/deck.html", "templates/deck-prompt.md"],
       cwd=repo,
     )
     assert_eq(add_code, 0, msg=add_err.text())

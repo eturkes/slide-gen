@@ -65,6 +65,66 @@ test "shell_quote leaves safe elements bare and single-quotes the rest" {
 }
 
 ///|
+/// Prompt composition appends authoritative runtime values and embeds the whole
+/// style contract after the tracked static policy. This small synthetic input
+/// keeps the boundary exact without snapshotting the shipped multi-kilobyte
+/// prompt/template pair.
+test "build_prompt composes contract runtime inputs and embedded style" {
+  let plan = plan_generate("/w/Projects/slide-gen", "projA")
+  let out = build_prompt(
+    plan, "CONTRACT MARKER\n", "<html>STYLE MARKER</html>\n",
+  )
+  assert_true(out.has_prefix("CONTRACT MARKER\n\n## Runtime inputs\n"))
+  assert_true(out.contains("- Project slug: `projA`\n"))
+  assert_true(out.contains("- Source project: `/w/Projects/projA`\n"))
+  assert_true(
+    out.contains(
+      "- Stage directory (the only durable write root): `/w/Projects/slide-gen/decks/.partial/projA`\n",
+    ),
+  )
+  assert_true(
+    out.has_suffix(
+      "<deck-style-contract>\n<html>STYLE MARKER</html>\n</deck-style-contract>\n",
+    ),
+  )
+}
+
+///|
+/// Plan joins stay canonical at the filesystem root and past trailing slashes,
+/// and the pure dry-run renderer shell-quotes only the spaced cwd argv element.
+test "generation plan and dry-run paths stay canonical" {
+  let at_root = plan_generate("/slide-gen", "projA")
+  assert_eq(at_root.cwd, "/")
+  assert_eq(at_root.source_dir, "/projA")
+  assert_eq(at_root.template, "/slide-gen/templates/deck.html")
+  assert_eq(at_root.prompt_contract, "/slide-gen/templates/deck-prompt.md")
+  assert_eq(at_root.stage_dir, "/slide-gen/decks/.partial/projA")
+  let trailing = plan_generate("/w/Projects/slide-gen/", "projA")
+  assert_eq(trailing.template, "/w/Projects/slide-gen/templates/deck.html")
+  assert_eq(
+    trailing.prompt_contract,
+    "/w/Projects/slide-gen/templates/deck-prompt.md",
+  )
+  assert_eq(trailing.stage_dir, "/w/Projects/slide-gen/decks/.partial/projA")
+  let spaced = plan_generate("/w/My Projects/slide-gen", "projA")
+  let shown = render_dry_run_text(spaced, "prompt\n", 900)
+  assert_true(shown.contains("-C '/w/My Projects'\n"))
+  assert_true(shown.contains("cwd:       /w/My Projects\n"))
+  assert_false(shown.has_suffix("\n\n"))
+}
+
+///|
+/// A missing tracked prompt/template fails before a Codex process can start and
+/// returns the producer diagnostic shape consumed by the retry orchestrator.
+async test "run_codex reports prompt load failure before execution" {
+  let plan = plan_generate("/definitely/missing/slide-gen", "projA")
+  let (code, stdout, stderr) = run_codex(plan)
+  assert_eq(code, 1)
+  assert_eq(stdout, "")
+  assert_true(stderr.has_prefix("prompt load failed:"))
+}
+
+///|
 /// Smallest honest bundle accepted by the deterministic validators: one complete
 /// slide, no claims or figures, an empty provenance array, and the no-gaps
 /// sentinel. Keeping this fixture local avoids coupling white-box harness tests
@@ -81,6 +141,7 @@ fn gen_stub_plan(root : String, project? : String = "project") -> GenPlan {
     cwd: root,
     source_dir: "\{root}/\{project}",
     template: "\{root}/template.html",
+    prompt_contract: "\{root}/deck-prompt.md",
     stage_dir: "\{root}/decks/.partial/\{project}",
     deck_dir: "\{root}/decks/\{project}",
   }

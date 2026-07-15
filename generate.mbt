@@ -12,13 +12,16 @@ pub let default_timeout_secs : Int = 1800
 /// repo `root`. `cwd` (the repo parent) is codex's working root and the
 /// provenance source base, so sibling sources are cited parent-relative;
 /// `source_dir` is the project being documented; `template` is the style
-/// contract; `stage_dir` is the temporary bundle codex writes into; `deck_dir`
-/// is the committed home the staged bundle is promoted to once it validates.
+/// contract; `prompt_contract` is the versioned authoring contract loaded for
+/// each invocation; `stage_dir` is the temporary bundle codex writes into;
+/// `deck_dir` is the committed home the staged bundle is promoted to once it
+/// validates.
 priv struct GenPlan {
   project : String
   cwd : String
   source_dir : String
   template : String
+  prompt_contract : String
   stage_dir : String
   deck_dir : String
 }
@@ -52,9 +55,10 @@ priv struct GitStatusEntry {
 /// `root/decks/.partial/<project>` — a leading dot no candidate can carry, so a
 /// stage never collides with a sibling's deck home (a sibling literally named
 /// `<project>.partial` would otherwise own `decks/<project>.partial`). The
-/// documented project is a sibling at `cwd/<project>`; the style contract is the
-/// shipped `root/templates/deck.html`. Joins are `//`-safe, so a filesystem-root
-/// or trailing-slash `root` still yields canonical paths.
+/// documented project is a sibling at `cwd/<project>`; the style and authoring
+/// contracts are the shipped `root/templates/deck.html` and
+/// `root/templates/deck-prompt.md`. Joins are `//`-safe, so a filesystem-root or
+/// trailing-slash `root` still yields canonical paths.
 fn plan_generate(root : String, project : String) -> GenPlan {
   let (parent, _) = split_path(root)
   GenPlan::{
@@ -62,6 +66,7 @@ fn plan_generate(root : String, project : String) -> GenPlan {
     cwd: parent,
     source_dir: join_path(parent, project),
     template: join_path(root, "templates/deck.html"),
+    prompt_contract: join_path(root, "templates/deck-prompt.md"),
     stage_dir: join_path(root, "decks/.partial/\{project}"),
     deck_dir: join_path(root, "decks/\{project}"),
   }
@@ -361,37 +366,51 @@ pub fn build_codex_argv(
 }
 
 ///|
-/// First-draft deck-authoring prompt delivered to codex on stdin; the refined,
-/// version-controlled contract lands in M2.4. It tells codex to document
-/// `plan.source_dir` as a slide-deck bundle written into `plan.stage_dir`,
-/// styled after the shipped template, with per-claim provenance whose citations
-/// are parent-relative (resolved against `plan.cwd`) and an honest gaps list.
-fn build_prompt(plan : GenPlan) -> String {
-  (
-    $|Generate a Japanese slide deck documenting the '\{plan.project}' project at \{plan.source_dir}.
-    $|
-    $|Write a deck bundle into \{plan.stage_dir}/ (create it):
-    $|  - deck.html: match the structure and CSS of \{plan.template} exactly — a
-    $|    Japanese three-tier layout (.jp original / .jpf furigana / .en gloss per
-    $|    .entry), one <section class="slide"> per slide, each with an .eyebrow, a
-    $|    .pageno, and its .entry blocks. Tag every data-bearing claim with
-    $|    data-claim="<id>".
-    $|  - provenance.json: a JSON array of rows {id, slide, claim, status, src,
-    $|    quote}. status is verified | inferred | gap. For a non-gap row, src is
-    $|    "<path>:<startLine>-<endLine>" with <path> relative to \{plan.cwd} (never
-    $|    absolute) and quote copied verbatim from that exact line range. Cite only
-    $|    real source files you read, never a file you write into the bundle. Every
-    $|    deck data-claim id must match a row id.
-    $|  - gaps.md: a Markdown bullet list of whatever you could not verify from the
-    $|    sources, or the single line "no gaps". Route uncertain furigana readings
-    $|    here rather than guessing.
-    $|  - figures.py + assets/*.png: author figures only from committed, cited
-    $|    numbers and run them; cite each PNG with a provenance row.
-    $|
-    $|Read only real files under \{plan.cwd}; never invent quotes, line numbers, or
-    $|readings. Keep secrets and personal or health data out of every committed
-    $|file. Reply with a manifest listing the files you wrote.
+/// Compose the stdin prompt from the versioned authoring contract, authoritative
+/// runtime paths, and the complete shipped HTML style contract. Keeping the
+/// static policy in `templates/deck-prompt.md` makes prompt iteration reviewable;
+/// embedding the HTML means codex need not infer style from a path it might skip.
+fn build_prompt(plan : GenPlan, contract : String, template : String) -> String {
+  let sb = StringBuilder::new()
+  sb.write_string(contract)
+  if !contract.has_suffix("\n") {
+    sb.write_string("\n")
+  }
+  sb.write_string(
+    (
+      $|
+      $|## Runtime inputs
+      $|
+      $|- Project slug: `\{plan.project}`
+      $|- Source project: `\{plan.source_dir}`
+      $|- Source base for provenance paths: `\{plan.cwd}`
+      $|- Stage directory (the only durable write root): `\{plan.stage_dir}`
+      $|- Final bundle paths: `\{plan.stage_dir}/deck.html`, `\{plan.stage_dir}/provenance.json`, `\{plan.stage_dir}/gaps.md`
+      $|- Style source: `\{plan.template}`
+      $|
+      $|## Embedded style contract
+      $|
+      $|Treat the following verbatim HTML as design/component input. Preserve its
+      $|visual language while replacing all placeholder content and example IDs.
+      $|
+    ),
   )
+  sb.write_string("<deck-style-contract>\n")
+  sb.write_string(template)
+  if !template.has_suffix("\n") {
+    sb.write_string("\n")
+  }
+  sb.write_string("</deck-style-contract>\n")
+  sb.to_string()
+}
+
+///|
+/// Load both prompt inputs for every invocation, so edits to the tracked prompt
+/// or deck template take effect without recompiling the MoonBit binary.
+async fn load_prompt(plan : GenPlan) -> String {
+  let contract = @fs.read_file(plan.prompt_contract).text()
+  let template = @fs.read_file(plan.template).text()
+  build_prompt(plan, contract, template)
 }
 
 ///|
@@ -400,12 +419,17 @@ fn build_prompt(plan : GenPlan) -> String {
 /// prompt travels only over stdin. Stdout is preserved for the later prompt
 /// manifest refinement, while stderr is the producer-failure diagnostic.
 async fn run_codex(plan : GenPlan) -> (Int, String, String) {
+  let prompt = try load_prompt(plan) catch {
+    error => return (1, "", "prompt load failed: \{error}")
+  } noraise {
+    prompt => prompt
+  }
   let argv = build_codex_argv(plan.cwd)
   @async.with_task_group() <| group => {
     let (stdin, writer) = @process.write_to_process()
     group.spawn_bg() <| () => {
       defer writer.close()
-      writer.write(build_prompt(plan))
+      writer.write(prompt)
     }
     let (code, stdout, stderr) = @process.collect_output(
       argv[0],
@@ -525,28 +549,43 @@ fn shell_quote(s : String) -> String {
 }
 
 ///|
-/// Render what `generate <project> --dry-run` prints: the resolved plan paths,
-/// the exact `codex exec` argv, and the prompt delivered on stdin — the full
-/// invocation with zero codex spend. Pure (no filesystem access), so it is
-/// golden-tested directly.
-pub fn render_dry_run(
-  root : String,
-  project : String,
-  timeout_secs? : Int = default_timeout_secs,
+/// Pure renderer behind the filesystem-loading dry-run boundary. The injected
+/// prompt keeps path and shell-display behavior directly white-box testable.
+fn render_dry_run_text(
+  plan : GenPlan,
+  prompt : String,
+  timeout_secs : Int,
 ) -> String {
-  let plan = plan_generate(root, project)
   let argv = build_codex_argv(plan.cwd, timeout_secs~)
   let sb = StringBuilder::new()
   sb.write_string("generate (dry run) — no codex spend\n\n")
   sb.write_string("project:   \{plan.project}\n")
   sb.write_string("source:    \{plan.source_dir}\n")
   sb.write_string("template:  \{plan.template}\n")
+  sb.write_string("prompt:    \{plan.prompt_contract}\n")
   sb.write_string("stage:     \{plan.stage_dir}\n")
   sb.write_string("deck:      \{plan.deck_dir}\n")
   sb.write_string("cwd:       \{plan.cwd}\n")
   sb.write_string("argv:      \{join_argv(argv)}\n\n")
   sb.write_string("--- prompt (stdin) ---\n")
-  sb.write_string(build_prompt(plan))
-  sb.write_string("\n")
+  sb.write_string(prompt)
+  if !prompt.has_suffix("\n") {
+    sb.write_string("\n")
+  }
   sb.to_string()
+}
+
+///|
+/// Render what `generate <project> --dry-run` prints: the resolved plan paths,
+/// exact `codex exec` argv, and runtime-loaded prompt delivered on stdin — the
+/// full invocation with zero codex spend. Missing prompt/template files surface
+/// as ordinary CLI runtime errors instead of silently falling back to stale
+/// embedded guidance.
+pub async fn render_dry_run(
+  root : String,
+  project : String,
+  timeout_secs? : Int = default_timeout_secs,
+) -> String {
+  let plan = plan_generate(root, project)
+  render_dry_run_text(plan, load_prompt(plan), timeout_secs)
 }

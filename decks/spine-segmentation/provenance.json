@@ -1,0 +1,152 @@
+[
+  {
+    "id": "purpose-baseline",
+    "slide": 1,
+    "claim": "The project is a CPU vertebra-segmentation baseline validated on public VerSe 2020 CT.",
+    "status": "verified",
+    "src": "spine-segmentation/README.md:3-4",
+    "quote": "CPU baseline for vertebra segmentation: TotalSegmentator (Apache-2.0) run on CPU,\nvalidated on a public VerSe 2020 CT case"
+  },
+  {
+    "id": "purpose-model",
+    "slide": 1,
+    "claim": "The model runner uses TotalSegmentator on CPU.",
+    "status": "verified",
+    "src": "spine-segmentation/README.md:3-3",
+    "quote": "TotalSegmentator (Apache-2.0) run on CPU"
+  },
+  {
+    "id": "purpose-qa",
+    "slide": 1,
+    "claim": "The project provides headless PNG montages and a 3D Slicer scene for visual QA.",
+    "status": "verified",
+    "src": "spine-segmentation/README.md:4-5",
+    "quote": "with headless PNG montages and a 3D\nSlicer `.mrb` scene for human visual QA."
+  },
+  {
+    "id": "guard-preflight",
+    "slide": 2,
+    "claim": "spine-seg runs a no-network preflight and grid/voxel verification.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:16-17",
+    "quote": "`spine-seg` (NOT bare `cli.segment`) runs the no-network preflight + grid/voxel\nverify"
+  },
+  {
+    "id": "guard-cohort-run",
+    "slide": 2,
+    "claim": "All 61 eligible cases exited 0 with nonzero L3 and T12 predictions and no verification failure.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:17-18",
+    "quote": "All 61 eligible cases ran\nexit 0 (both L3 + T12 predicted nonzero; no verify-fail)"
+  },
+  {
+    "id": "guard-map-pin",
+    "slide": 2,
+    "claim": "The full 25-level crosswalk is checked against the installed map at prediction and scoring.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:35-38",
+    "quote": "asserts the full 25-level crosswalk against the installed TS map at **both** ends —\n  `spine-seg` before predicting/stamping, and the runner before scoring"
+  },
+  {
+    "id": "protocol-eligibility",
+    "slide": 3,
+    "claim": "Presence of L3 and T12 in GT mask voxels selected 61 of 80 validation cases for scoring.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:28-32",
+    "quote": "auto-filter eligible (`REQUIRED {19,22}` = L3,T12 in\n  GT **mask voxels**, not centroids) → score each pred → tidy long sidecar\n  `data/metrics/cohort_dice.csv` (gitignored).\n- cohort: **80 scanned → 61 eligible / 19 ineligible**"
+  },
+  {
+    "id": "protocol-aggregation",
+    "slide": 3,
+    "claim": "The cohort metric aggregates per-vertebra Dice to a per-case mean and then an equally weighted mean across cases.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:224-226",
+    "quote": "Per-vertebra Dice → per-case mean over scoreable GT levels →\n  cohort mean-of-per-case (each case weighted equally)."
+  },
+  {
+    "id": "protocol-empty",
+    "slide": 3,
+    "claim": "A GT-present, prediction-empty vertebra scores Dice 0; L6 and T13 are unscoreable transitional levels.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:44-46",
+    "quote": "Missing vertebra (GT present, pred empty) = Dice 0, counted. Transitional levels\n  (L6/T13, no TS class) = `scoreable=False, reason=transitional`; the case still\n  scores on its other levels."
+  },
+  {
+    "id": "result-center",
+    "slide": 4,
+    "claim": "Across 61 cases, the mean of per-case means was 0.8093 and the per-case median was 0.9176.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:179-180",
+    "quote": "cohort Dice (mean of 61 per-case means): 0.8093\n  per-case median 0.9176"
+  },
+  {
+    "id": "result-thresholds",
+    "slide": 4,
+    "claim": "Thirty-five cases scored at least 0.9 and 43 scored at least 0.8.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:53-54",
+    "quote": "**Per-case distribution (n=61), disjoint bins:** ≥0.9 → 35 · [0.8,0.9) → 8 ·\n  [0.5,0.8) → 13 · <0.5 → 5 (sum 61; cumulative ≥0.8 → 43)."
+  },
+  {
+    "id": "result-level-medians",
+    "slide": 4,
+    "claim": "Per-vertebra medians ranged from 0.89 to 0.94 across C1-L5.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:50-50",
+    "quote": "per-vertebra **medians 0.89–0.94 across the whole spine (C1–L5)**"
+  },
+  {
+    "id": "figure-case-distribution",
+    "slide": 4,
+    "claim": "The figure shows 61 case-level mean Dice values in four disjoint bins: at least 0.9 = 35, 0.8 to below 0.9 = 8, 0.5 to below 0.8 = 13, and below 0.5 = 5.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:53-54",
+    "quote": "**Per-case distribution (n=61), disjoint bins:** ≥0.9 → 35 · [0.8,0.9) → 8 ·\n  [0.5,0.8) → 13 · <0.5 → 5 (sum 61; cumulative ≥0.8 → 43)."
+  },
+  {
+    "id": "failure-tail-shape",
+    "slide": 5,
+    "claim": "The mean-median gap is interpreted as consistent with a low-score tail.",
+    "status": "inferred",
+    "src": "spine-segmentation/docs/run_m2.md:48-52",
+    "quote": "**Mean ≪ median (0.8093 vs 0.9176).** TS off-the-shelf is excellent on the typical\n  case — per-vertebra **medians 0.89–0.94 across the whole spine (C1–L5)** — but a\n  caudal/regional label-drift tail (below) craters the means and inflates thoracolumbar\n  SD (L4 mean 0.658 / SD 0.409, median 0.937)."
+  },
+  {
+    "id": "failure-l4",
+    "slide": 5,
+    "claim": "For L4, mean Dice was 0.658, SD was 0.409, and median was 0.937.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:52-52",
+    "quote": "L4 mean 0.658 / SD 0.409, median 0.937"
+  },
+  {
+    "id": "failure-label-drift",
+    "slide": 5,
+    "claim": "The low-score tail is interpreted as consistent with sustained caudal or regional level drift.",
+    "status": "inferred",
+    "src": "spine-segmentation/docs/run_m2.md:55-58",
+    "quote": "**One failure axis — caudal/regional label drift — across a severity spectrum.** TS\n  mislabels vertebrae from some onset level downward; the high per-vertebra MEDIANS\n  (0.89–0.94, C1–L5) confirm the typical case segments well, so the depressed\n  thoracolumbar MEANS are this tail, not boundary error."
+  },
+  {
+    "id": "limit-native-grid",
+    "slide": 6,
+    "claim": "The reported Dice is an internal CT-native-grid metric, not the VerSe 1 mm-isotropic challenge score.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:234-235",
+    "quote": "This native-grid Dice is an **INTERNAL** metric,\n  NOT the VerSe 1 mm-isotropic challenge score"
+  },
+  {
+    "id": "limit-missing-metrics",
+    "slide": 6,
+    "claim": "Surface metrics HD/NSD and identification rate are outside M2 scope.",
+    "status": "verified",
+    "src": "spine-segmentation/docs/run_m2.md:238-240",
+    "quote": "**Out of M2 scope.** Surface metrics (HD/NSD) and identification rate — Dice is\n  boundary-insensitive; the per-(case, level) record is shaped to gain a boundary\n  column later (M3/M4)."
+  },
+  {
+    "id": "gap-human-signoff",
+    "slide": 6,
+    "claim": "3D Slicer visual sign-off is not recorded in committed evidence.",
+    "status": "gap"
+  }
+]

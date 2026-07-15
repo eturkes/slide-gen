@@ -531,3 +531,58 @@ async test "validate_bundle_dir coverage warnings" {
     json_inspect(validate_bundle_dir(clean, "project", root, root).codes(), content=[])
   }
 }
+
+///|
+/// The shipped template's forward-contract example IDs are real, parseable
+/// `data-claim` attributes. Pairing them with schema-valid rows produces a clean
+/// whole-bundle report, so prompt authors can safely copy the component shape
+/// before replacing both example IDs and placeholder content.
+async test "shipped template claim examples satisfy bundle cross-reference" {
+  guard find_repo_root() is Some(source_root) else { return }
+  let html = @fs.read_file("\{source_root}/templates/deck.html").text()
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-template-claims")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let bundle = make_bundle(
+      root,
+      "template",
+      Some(html),
+      Some(prov_gap_rows(["example-verified", "example-gap"])),
+      Some("- Template claim IDs are illustrative and require replacement.\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(
+        bundle,
+        "project",
+        source_root,
+        "\{source_root}/decks",
+      ).codes(),
+      content=[],
+    )
+  }
+}
+
+///|
+/// M2.4's promoted live bundle remains a validator-clean acceptance fixture when
+/// its sibling source project is available. Standalone clones skip only the
+/// source-dependent quote checks; the committed bundle itself remains versioned
+/// and its structure is covered by the ordinary deck tests.
+async test "committed spine live bundle passes when its source is available" {
+  guard find_repo_root() is Some(root) else { return }
+  let source_base = split_path(root).0
+  guard @fs.exists("\{source_base}/spine-segmentation") else { return }
+  let bundle = "\{root}/decks/spine-segmentation"
+  let report = validate_bundle_dir(
+    bundle,
+    "spine-segmentation",
+    source_base,
+    "\{root}/decks",
+  )
+  json_inspect(report.codes(), content=[])
+  let figures = @fs.read_file("\{bundle}/figures.py").text()
+  assert_true(
+    figures.has_prefix(
+      "# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\n",
+    ),
+  )
+}

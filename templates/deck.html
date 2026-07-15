@@ -12,6 +12,7 @@
   Slots per slide:
     .eyebrow → NN counter + 「JA見出し · en label」
     .entry   → 3 tiers: .jp (bold JA term) · .jpf (same JA, 漢字 as <ruby>漢字<rt>かな</rt></ruby>) · .en (EN gloss; <b>…</b> lead-in)
+    data-claim → stable provenance ID on the factual .entry/.cap/<img> (replace example IDs)
     figure   → .col-fig (landscape) | .col-fig.tall (portrait); swap the .fig-ph box for <img src="assets/…">
     .cap     → caption (<b>lead.</b> detail)
     .pageno  → 「project · n / N」
@@ -96,12 +97,12 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
   <div class="eyebrow"><span class="n">01</span><span>セクション見出し &nbsp;·&nbsp; section label</span></div>
   <div class="cols">
     <div class="col-text">
-      <div class="entry">
+      <div class="entry" data-claim="example-verified">
         <div class="jp">要点一： ここに最初の要点を一文で記述します。</div>
         <div class="jpf"><ruby>要点<rt>ようてん</rt></ruby><ruby>一<rt>いち</rt></ruby>： ここに<ruby>最初<rt>さいしょ</rt></ruby>の<ruby>要点<rt>ようてん</rt></ruby>を<ruby>一文<rt>いちぶん</rt></ruby>で<ruby>記述<rt>きじゅつ</rt></ruby>します。</div>
         <div class="en"><b>Point one:</b> state the first key point in a single sentence.</div>
       </div>
-      <div class="entry">
+      <div class="entry" data-claim="example-gap">
         <div class="jp">手法： <code>tool</code> をデフォルト設定のまま用います。</div>
         <div class="jpf"><ruby>手法<rt>しゅほう</rt></ruby>： <code>tool</code> をデフォルト<ruby>設定<rt>せってい</rt></ruby>のまま<ruby>用<rt>もち</rt></ruby>います。</div>
         <div class="en"><b>Method:</b> run <code>tool</code> with default settings — <code>code</code> spans render inline.</div>

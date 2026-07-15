@@ -136,9 +136,8 @@ async test "cli end-to-end" {
 ///|
 /// End-to-end dry run: `generate --dry-run <candidate>` prints the resolved
 /// invocation and exits 0 with no codex spend; `generate <unknown>` is rejected
-/// (exit 1) like `enable`; and `generate <candidate>` without the flag exits 1
-/// with a forward-pointing message (live generation is a later unit). Gated on
-/// SLIDE_GEN_BIN, so a bare `moon test` is a no-op.
+/// (exit 1) like `enable`. Live generation has its own explicit spend gate.
+/// Gated on SLIDE_GEN_BIN, so a bare `moon test` is a no-op.
 async test "generate dry-run end-to-end" {
   guard @env.get_env_var("SLIDE_GEN_BIN") is Some(bin) else { return }
   @async.with_task_group() <| group => {
@@ -179,14 +178,82 @@ async test "generate dry-run end-to-end" {
     )
     assert_eq(code, 1)
     assert_true(err.text().contains("unknown project"))
+  }
+}
 
-    // candidate without --dry-run -> exit 1, forward-pointing message.
-    let (code, _, err) = @process.collect_output(
+///|
+/// Explicit-spend smoke for the production Codex path. SLIDE_GEN_LIVE and the
+/// built-binary gate must both be present; ordinary moon test and just test runs
+/// return before setup. A tiny synthetic sibling project plus the shipped style
+/// contract keeps this about plumbing: Codex must exit through the harness and
+/// leave a non-empty deck.html in either the promoted or retained bundle.
+async test "generate live codex smoke" {
+  guard @env.get_env_var("SLIDE_GEN_LIVE") is Some(_) else { return }
+  guard @env.get_env_var("SLIDE_GEN_BIN") is Some(bin) else { return }
+  guard find_repo_root() is Some(source_root) else {
+    abort("live smoke could not find the source slide-gen root")
+  }
+  let template = @fs.read_file("\{source_root}/templates/deck.html").text()
+  @async.with_task_group() <| group => {
+    let tmp = @fs.tmpdir(prefix="slide-gen-live")
+    group.add_defer(() => @fs.rmdir(tmp, recursive=true))
+    let projects_dir = "\{tmp}/Projects"
+    let repo = "\{projects_dir}/slide-gen"
+    let source = "\{projects_dir}/projA"
+    @fs.mkdir("\{repo}/templates", recursive=true)
+    @fs.mkdir(source)
+    @fs.write_file(
+      "\{repo}/moon.mod",
+      "name = \"eturkes/slide-gen\"\n",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
+      "\{repo}/templates/deck.html",
+      template,
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
+      "\{source}/README.md",
+      "# projA\n\nPurpose: a tiny fixture project for the slide generation smoke.\n",
+      create_mode=CreateOrTruncate,
+    )
+    let (init_code, _, init_err) = @process.collect_output(
+      "git",
+      ["init", "-q"],
+      cwd=repo,
+    )
+    assert_eq(init_code, 0, msg=init_err.text())
+    let (add_code, _, add_err) = @process.collect_output(
+      "git",
+      ["add", "moon.mod", "templates/deck.html"],
+      cwd=repo,
+    )
+    assert_eq(add_code, 0, msg=add_err.text())
+    let (commit_code, _, commit_err) = @process.collect_output(
+      "git",
+      [
+        "-c", "user.name=slide-gen smoke", "-c", "user.email=slide-gen@example.invalid",
+        "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit",
+        "-qm", "fixture",
+      ],
+      cwd=repo,
+    )
+    assert_eq(commit_code, 0, msg=commit_err.text())
+
+    let (code, stdout, stderr) = @process.collect_output(
       bin,
       ["generate", "projA"],
       cwd=repo,
     )
-    assert_eq(code, 1)
-    assert_true(err.text().contains("--dry-run"))
+    assert_true(code == 0 || code == 1)
+    let published = "\{repo}/decks/projA"
+    let retained = "\{repo}/decks/.partial/projA"
+    let bundle = if @fs.exists(published) { published } else { retained }
+    let deck_path = "\{bundle}/deck.html"
+    assert_true(
+      @fs.exists(deck_path),
+      msg="live codex left no deck.html\nstdout:\{stdout.text()}\nstderr:\{stderr.text()}",
+    )
+    assert_true(@fs.read_file(deck_path).binary().length() > 0)
   }
 }

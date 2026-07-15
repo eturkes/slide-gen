@@ -1,5 +1,8 @@
 import {
+  "moonbitlang/async",
   "moonbitlang/async/fs",
+  "moonbitlang/async/io",
+  "moonbitlang/async/process",
   "moonbitlang/core/argparse",
   "moonbitlang/core/env",
   "moonbitlang/core/json",
@@ -7,13 +10,7 @@ import {
 }
 
 import {
-  "moonbitlang/async",
-  "moonbitlang/async/process",
   "moonbitlang/core/quickcheck/splitmix",
 } for "test"
-
-import {
-  "moonbitlang/async",
-} for "wbtest"
 
 supported_targets = "+native"

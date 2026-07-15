@@ -334,3 +334,134 @@ async test "stage_validate_promote rejects a swapped stage-root symlink" {
     assert_true(@fs.exists("\{target_plan.stage_dir}/deck.html"))
   }
 }
+
+///|
+/// The confinement tripwire compares tracked-status entries outside `decks/`
+/// against its pre-run baseline. An unchanged dirty file is tolerated, while a
+/// new change, a disappeared baseline change, or a status transition is named;
+/// generated-deck changes and untracked records are outside this best-effort
+/// signal.
+test "changed_tracked_paths diffs outside-deck status against baseline" {
+  let before = " M unchanged.txt\u{0} M removed.txt\u{0} M transition.txt\u{0} M decks/proj/deck.html\u{0}"
+  let after = " M unchanged.txt\u{0} M added name.txt\u{0}M  transition.txt\u{0} D decks/proj/deck.html\u{0}?? untracked.txt\u{0}"
+  json_inspect(changed_tracked_paths(before, after), content=[
+    "added name.txt", "removed.txt", "transition.txt",
+  ])
+}
+
+///|
+/// Porcelain-v1 `-z` emits a rename/copy's destination and source as adjacent
+/// NUL records. Both paths belong to one status entry: an all-decks rename is
+/// allowed, while a rename crossing the boundary reports only its outside path.
+test "changed_tracked_paths parses nul rename records without path quoting" {
+  let after = "R  decks/proj/new.html\u{0}source old.html\u{0}R  decks/proj/newer.html\u{0}decks/proj/older.html\u{0}"
+  json_inspect(changed_tracked_paths("", after), content=["source old.html"])
+}
+
+///|
+/// Exercise the real porcelain command over a temporary Git repo: the clean
+/// baseline is empty, a tracked source edit appears, a tracked deck edit is
+/// filtered by the boundary rule, and an untracked write is omitted at capture.
+async test "tracked_git_status captures only relevant tracked changes" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-git-status")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    @fs.mkdir("\{root}/decks/proj", recursive=true)
+    @fs.write_file(
+      "\{root}/source.txt",
+      "before\n",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
+      "\{root}/decks/proj/deck.html",
+      "before\n",
+      create_mode=CreateOrTruncate,
+    )
+    let (init_code, _, _) = @process.collect_output(
+      "git",
+      ["init", "-q"],
+      cwd=root,
+    )
+    assert_eq(init_code, 0)
+    let (add_code, _, _) = @process.collect_output(
+      "git",
+      ["add", "source.txt", "decks/proj/deck.html"],
+      cwd=root,
+    )
+    assert_eq(add_code, 0)
+    let (commit_code, _, _) = @process.collect_output(
+      "git",
+      [
+        "-c", "user.name=slide-gen test", "-c", "user.email=slide-gen@example.invalid",
+        "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit",
+        "-qm", "fixture",
+      ],
+      cwd=root,
+    )
+    assert_eq(commit_code, 0)
+    guard tracked_git_status(root) is Some(before) else {
+      abort("clean git baseline capture failed")
+    }
+    assert_eq(before, "")
+    @fs.write_file(
+      "\{root}/source.txt",
+      "after\n",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
+      "\{root}/decks/proj/deck.html",
+      "after\n",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
+      "\{root}/untracked.txt",
+      "ignored\n",
+      create_mode=CreateOrTruncate,
+    )
+    guard tracked_git_status(root) is Some(after) else {
+      abort("dirty git status capture failed")
+    }
+    json_inspect(changed_tracked_paths(before, after), content=["source.txt"])
+  }
+}
+
+///|
+/// CLI outcome rendering is a pure, stable boundary: promotion prints the
+/// mandatory-file manifest plus advisory findings and exits zero; retained
+/// blocking reports and producer failures preserve their diagnostics and exit
+/// one, with exactly one final newline.
+test "render_outcome maps promote retain and exec failure" {
+  let (promoted_message, promoted_code) = render_outcome(
+    Promoted(Report::{
+      findings: [should("prov.untagged_number", "number needs a citation")],
+    }),
+  )
+  inspect(
+    "\{promoted_code}|\{promoted_message}",
+    content=(
+      #|0|generated: deck.html, provenance.json, gaps.md
+      #|[SHOULD] prov.untagged_number: number needs a citation
+      #|
+    ),
+  )
+  let (retained_message, retained_code) = render_outcome(
+    Retained(Report::{ findings: [must("deck.missing", "deck absent")] }),
+  )
+  inspect(
+    "\{retained_code}|\{retained_message}",
+    content=(
+      #|1|[MUST] deck.missing: deck absent
+      #|
+    ),
+  )
+  let (failed_message, failed_code) = render_outcome(
+    ExecFailed("codex failed\n"),
+  )
+  inspect(
+    "\{failed_code}|\{failed_message}",
+    content=(
+      #|1|codex failed
+      #|
+    ),
+  )
+}

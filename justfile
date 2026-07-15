@@ -22,7 +22,7 @@ check:
 build:
     moon build --target {{target}}
 
-# Run the test suite; e2e tests exec the built binary via SLIDE_GEN_BIN.
+# Run the suite; e2e tests use SLIDE_GEN_BIN. SLIDE_GEN_LIVE=1 opts into Codex.
 test: build
     SLIDE_GEN_BIN="$(realpath "$(find _build/{{target}} -name main.exe -path '*cmd/main*' -print -quit)")" moon test --target {{target}}
 

@@ -106,11 +106,15 @@ async fn main {
         }
         match sub.flags.get("dry-run") {
           Some(true) => @stdio.stdout.write(@lib.render_dry_run(root, target))
-          _ =>
-            die(
-              "slide-gen: live deck generation lands in a later unit; rerun with --dry-run to preview the invocation\n",
-              1,
-            )
+          _ => {
+            let outcome = @lib.generate_project(root, target)
+            let (message, code) = @lib.render_outcome(outcome)
+            if code == 0 {
+              @stdio.stdout.write(message)
+            } else {
+              die(message, code)
+            }
+          }
         }
       }
       _ => ()

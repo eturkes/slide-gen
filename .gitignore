@@ -16,7 +16,7 @@ target/
 .mooncakes/
 .moonagent/
 
-# slide-gen runtime state + generated decks
+# slide-gen runtime state + incomplete generation stages
 enabled.txt
 enabled.txt.tmp
-decks/
+decks/.partial/

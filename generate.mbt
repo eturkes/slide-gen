@@ -101,6 +101,16 @@ fn plan_generate(root : String, project : String) -> GenPlan {
 }
 
 ///|
+/// Adapt generation's named paths to the shared directory-publication seam.
+fn GenPlan::publication(self : GenPlan) -> PublicationPaths {
+  PublicationPaths::{
+    stage: self.stage_dir,
+    backup: self.backup_dir,
+    live: self.deck_dir,
+  }
+}
+
+///|
 /// Join a directory `base` and a relative `child` with a single separator:
 /// trailing slashes on `base` are stripped and the filesystem-root `/` is
 /// special-cased, so no join ever produces a `//`. Keeps every derived plan path
@@ -284,140 +294,6 @@ async fn check_tracked_confinement(
 }
 
 ///|
-/// Remove one filesystem entry without ever recursively traversing a symlink at
-/// its root. A real directory is removed recursively; files, symlinks, and other
-/// non-directory entries are unlinked. A missing entry is already clean.
-async fn remove_entry_no_follow(path : String) -> Unit {
-  let entry_kind = try @fs.kind(path, follow_symlink=false) catch {
-    _ => None
-  } noraise {
-    kind => Some(kind)
-  }
-  match entry_kind {
-    None => ()
-    Some(@fs.Directory) => @fs.rmdir(path, recursive=true)
-    Some(_) => @fs.remove(path)
-  }
-}
-
-///|
-/// Ensure `path` is an existing real directory without treating an already
-/// present directory as an error (async fs `mkdir(recursive=true)` still reports
-/// EEXIST for the exact leaf on this toolchain).
-async fn ensure_real_dir(path : String) -> Unit {
-  let kind = try @fs.kind(path, follow_symlink=false) catch {
-    _ => None
-  } noraise {
-    kind => Some(kind)
-  }
-  match kind {
-    Some(@fs.Directory) => ()
-    _ => @fs.mkdir(path, recursive=true)
-  }
-}
-
-///|
-/// Establish the three harness-owned directory roots without following a
-/// symlink at any root. Checking `decks/` first also makes the subsequent
-/// `.partial/` and `.previous/` checks safe from a swapped common parent.
-async fn ensure_reserved_roots(plan : GenPlan) -> Unit {
-  ensure_real_dir(split_path(plan.deck_dir).0)
-  ensure_real_dir(split_path(plan.stage_dir).0)
-  ensure_real_dir(split_path(plan.backup_dir).0)
-}
-
-///|
-/// Recreate the reserved stage as an empty real directory. The no-follow removal
-/// prevents a stale or swapped stage-root symlink from turning recursive cleanup
-/// into deletion of its target.
-async fn recreate_stage(plan : GenPlan) -> Unit {
-  ensure_reserved_roots(plan)
-  remove_entry_no_follow(plan.stage_dir)
-  @fs.mkdir(plan.stage_dir)
-}
-
-///|
-/// Recover an interrupted prior replacement. A real saved deck is restored when
-/// the public path is absent; when both exist, the public path won and the stale
-/// save is discarded. A forged non-directory save is removed without following
-/// it. This makes the two-rename publication protocol restart-safe.
-async fn recover_publication(plan : GenPlan) -> Unit {
-  ensure_reserved_roots(plan)
-  let deck_kind = try @fs.kind(plan.deck_dir, follow_symlink=false) catch {
-    _ => None
-  } noraise {
-    kind => Some(kind)
-  }
-  let backup_kind = try @fs.kind(plan.backup_dir, follow_symlink=false) catch {
-    _ => None
-  } noraise {
-    kind => Some(kind)
-  }
-  match (deck_kind, backup_kind) {
-    (None, Some(@fs.Directory)) => {
-      ensure_real_dir(split_path(plan.deck_dir).0)
-      @fs.rename(plan.backup_dir, plan.deck_dir)
-    }
-    (Some(_), Some(_)) | (None, Some(_)) =>
-      remove_entry_no_follow(plan.backup_dir)
-    _ => ()
-  }
-}
-
-///|
-/// Replace a published deck while preserving the old entry until the validated
-/// stage has landed. The old deck first moves to a collision-free reserved
-/// backup; a failed stage rename restores it before propagating the error. After
-/// success, backup cleanup is best-effort and the next run removes any leftover.
-/// The protocol is rollback-safe and restart-recoverable, though the two rename
-/// operations still leave a small crash interval where the public path is absent.
-async fn promote_stage(plan : GenPlan) -> Unit {
-  ensure_reserved_roots(plan)
-  remove_entry_no_follow(plan.backup_dir)
-  let had_published = try @fs.kind(plan.deck_dir, follow_symlink=false) catch {
-    _ => false
-  } noraise {
-    _ => true
-  }
-  if had_published {
-    ensure_real_dir(split_path(plan.backup_dir).0)
-    @fs.rename(plan.deck_dir, plan.backup_dir)
-  }
-  try @fs.rename(plan.stage_dir, plan.deck_dir) catch {
-    error => {
-      if had_published {
-        try @fs.rename(plan.backup_dir, plan.deck_dir) catch {
-          _ => ()
-        } noraise {
-          _ => ()
-        }
-      }
-      raise error
-    }
-  } noraise {
-    _ => ()
-  }
-  try remove_entry_no_follow(plan.backup_dir) catch {
-    _ => ()
-  } noraise {
-    _ => ()
-  }
-}
-
-///|
-/// Assert the stage root itself is a real directory rather than a symlink. The
-/// bundle validator also rejects a symlink root; this explicit bracket produces
-/// the orchestration-level diagnostic before sidecar writes or promotion.
-async fn stage_is_real_directory(path : String) -> Bool {
-  try @fs.kind(path, follow_symlink=false) catch {
-    _ => false
-  } noraise {
-    @fs.Directory => true
-    _ => false
-  }
-}
-
-///|
 /// Run a producer into a fresh stage, tripwire + validate its raw output, run
 /// the authoring-time postprocessor, then tripwire + validate again before
 /// publishing. The pre-pass preserves precise partial-output diagnostics and
@@ -433,7 +309,8 @@ async fn stage_validate_promote(
   confine~ : async (GenPlan) -> String?,
   retries? : Int = 1,
 ) -> GenOutcome {
-  let recovery_error : String? = try recover_publication(plan) catch {
+  let publication = plan.publication()
+  let recovery_error : String? = try recover_publication(publication) catch {
     error => Some("\{error}")
   } noraise {
     _ => None
@@ -445,7 +322,7 @@ async fn stage_validate_promote(
   let retry_count = if retries < 0 { 0 } else { retries }
   let mut last : GenOutcome = ExecFailed("generation did not run")
   for _ in 0..<(retry_count + 1) {
-    recreate_stage(plan)
+    recreate_stage(publication)
     let (code, _, stderr) = produce(plan)
     match confine(plan) {
       Some(offenders) => return ExecFailed("write escaped bundle: \{offenders}")
@@ -455,7 +332,7 @@ async fn stage_validate_promote(
       last = ExecFailed(stderr)
       continue
     }
-    if !stage_is_real_directory(plan.stage_dir) {
+    if !is_real_directory_no_follow(plan.stage_dir) {
       return ExecFailed("stage root is not a directory")
     }
     let initial_report = validate_bundle_dir(
@@ -468,7 +345,7 @@ async fn stage_validate_promote(
       last = Retained(initial_report)
       continue
     }
-    if !stage_is_real_directory(plan.stage_dir) {
+    if !is_real_directory_no_follow(plan.stage_dir) {
       return ExecFailed("stage root is not a directory")
     }
     let (post_code, post_stderr) = postprocess(plan)
@@ -490,10 +367,10 @@ async fn stage_validate_promote(
       last = Retained(final_report)
       continue
     }
-    if !stage_is_real_directory(plan.stage_dir) {
+    if !is_real_directory_no_follow(plan.stage_dir) {
       return ExecFailed("stage root is not a directory")
     }
-    let promote_error : String? = try promote_stage(plan) catch {
+    let promote_error : String? = try promote_stage(publication) catch {
       error => Some("\{error}")
     } noraise {
       _ => None
@@ -693,7 +570,9 @@ async fn generate_project_from_baseline(
 /// every tracked path remains protected until promotion.
 pub async fn generate_project(root : String, project : String) -> GenOutcome {
   let plan = plan_generate(root, project)
-  let recovery_error : String? = try recover_publication(plan) catch {
+  let recovery_error : String? = try
+    recover_publication(plan.publication())
+  catch {
     error => Some("\{error}")
   } noraise {
     _ => None

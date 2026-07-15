@@ -297,7 +297,7 @@ async test "publication rollback and restart recovery preserve the old deck" {
       create_mode=CreateOrTruncate,
     )
     let mut failed = false
-    try promote_stage(plan) catch {
+    try promote_stage(plan.publication()) catch {
       _ => failed = true
     } noraise {
       _ => ()
@@ -307,7 +307,7 @@ async test "publication rollback and restart recovery preserve the old deck" {
     assert_false(@fs.exists(plan.backup_dir))
     @fs.rename(plan.deck_dir, plan.backup_dir)
     assert_false(@fs.exists(plan.deck_dir))
-    recover_publication(plan)
+    recover_publication(plan.publication())
     assert_eq(@fs.read_file("\{plan.deck_dir}/sentinel").text(), "old")
     assert_false(@fs.exists(plan.backup_dir))
   }

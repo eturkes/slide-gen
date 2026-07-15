@@ -48,6 +48,43 @@ pub(all) struct RenderEntry {
 }
 
 ///|
+/// Stable preflight failure surfaced before rasterization. `code` is the
+/// machine-readable contract asserted by controlled tests; `detail` retains the
+/// validator or process diagnostic for the eventual CLI.
+pub(all) struct RenderFailure {
+  code : String
+  detail : String
+}
+
+///|
+/// Browser-resolved, validator-clean input handed to M3.2c. The stage and its
+/// real isolated profile already exist; `page_count` is the matching source and
+/// browser-DOM slide count in the bounded render range.
+pub(all) struct RenderContext {
+  plan : RenderPlan
+  browser : String
+  page_count : Int
+}
+
+///|
+/// M3.2b outcome: either a context safe to begin fixed-page capture or one
+/// deterministic failure. Raster/PDF/publication outcomes land in later units.
+pub(all) enum RenderPreflightOutcome {
+  PreflightReady(RenderContext)
+  PreflightFailed(RenderFailure)
+}
+
+///|
+/// Injectable process result. Production fills it through collect_output;
+/// white-box tests return controlled tool/font/Chromium outcomes without
+/// spawning processes.
+priv struct RenderCommandResult {
+  code : Int
+  stdout : String
+  stderr : String
+}
+
+///|
 /// A render target is one representable direct child that cannot overlap the
 /// reserved `.partial`/`.previous` roots: the shared CLI name policy plus no
 /// leading dot. Internal dots, spaces, quotes, and non-ASCII remain valid.
@@ -89,6 +126,17 @@ pub fn plan_render(root : String, project : String) -> RenderPlan? {
     wrapper_path: join_path(stage_dir, ".page.html"),
     pdf_path: join_path(stage_dir, "deck.pdf"),
   })
+}
+
+///|
+/// Adapt render paths to the shared rollback-safe directory-publication seam.
+/// M3.2b uses only stage recreation; M3.3 will recover/promote these same paths.
+fn RenderPlan::publication(self : RenderPlan) -> PublicationPaths {
+  PublicationPaths::{
+    stage: self.stage_dir,
+    backup: self.backup_dir,
+    live: self.live_dir,
+  }
 }
 
 ///|
@@ -219,8 +267,10 @@ fn bounded_render_timeout(timeout_secs : Int) -> Int {
 ///|
 /// Shared bounded/offline Chromium prefix. The dead proxy plus loopback-bypass
 /// subtraction catches literal-IP traffic, the resolver rule fails DNS, and
-/// background services are suppressed. The validated deck itself is static;
-/// these flags are defense-in-depth, not a browser sandbox claim.
+/// background services/crash reporting are suppressed. Disabling mutable field-
+/// trial startup config also keeps ChromiumFish's CLI capture path terminating
+/// deterministically. The validated deck itself is static; these flags are
+/// defense-in-depth, not a browser sandbox claim.
 fn chromium_argv(
   browser : String,
   profile_dir : String,
@@ -232,6 +282,8 @@ fn chromium_argv(
     bounded_render_timeout(timeout_secs).to_string(),
     browser,
     "--headless=new",
+    "--disable-field-trial-config",
+    "--disable-breakpad",
     "--no-sandbox",
     "--disable-gpu",
     "--force-device-scale-factor=1",
@@ -263,6 +315,219 @@ pub fn build_dump_dom_argv(
   argv.push("--dump-dom")
   argv.push(deck_url)
   Some(argv)
+}
+
+///|
+/// Construct one stable preflight failure.
+fn render_preflight_failed(
+  code : String,
+  detail : String,
+) -> RenderPreflightOutcome {
+  PreflightFailed(RenderFailure::{ code, detail })
+}
+
+///|
+/// Prefer stderr, then stdout, then the numeric exit when describing a failed
+/// external command. Edge whitespace is presentation noise and is removed.
+fn render_command_detail(result : RenderCommandResult) -> String {
+  let stderr = result.stderr.trim().to_owned()
+  if !stderr.is_empty() {
+    return stderr
+  }
+  let stdout = result.stdout.trim().to_owned()
+  if !stdout.is_empty() {
+    return stdout
+  }
+  "exit code \{result.code}"
+}
+
+///|
+/// Whether one path's final component is a real regular file. Bundle input and
+/// the resolved browser binary both fail closed on missing/symlink/special
+/// entries.
+async fn is_real_regular_no_follow(path : String) -> Bool {
+  try @fs.kind(path, follow_symlink=false) catch {
+    _ => false
+  } noraise {
+    @fs.Regular => true
+    _ => false
+  }
+}
+
+///|
+/// Execute one argv vector without a shell. Start/decoding failures become a
+/// synthetic nonzero result so every production failure follows the same
+/// deterministic stage-specific classification as injected failures.
+async fn run_render_command(argv : Array[String]) -> RenderCommandResult {
+  guard argv.length() > 0 else {
+    return RenderCommandResult::{
+      code: -1,
+      stdout: "",
+      stderr: "empty command",
+    }
+  }
+  try {
+    let (code, stdout, stderr) = @process.collect_output(argv[0], argv[1:])
+    RenderCommandResult::{ code, stdout: stdout.text(), stderr: stderr.text() }
+  } catch {
+    error => RenderCommandResult::{ code: -1, stdout: "", stderr: "\{error}" }
+  } noraise {
+    result => result
+  }
+}
+
+///|
+/// Filesystem/validator/tool/DOM preflight with an injected argv runner. Deck
+/// directory and deck.html are lstat-checked and the complete structural/static
+/// validator runs before the first external process. The same cleaned scanner
+/// that drives validation counts source and dumped-DOM section.slide elements.
+async fn preflight_render_with(
+  plan : RenderPlan,
+  run~ : async (Array[String]) -> RenderCommandResult,
+  timeout_secs? : Int = default_render_timeout_secs,
+) -> RenderPreflightOutcome {
+  if !is_real_directory_no_follow(plan.bundle_dir) {
+    return render_preflight_failed(
+      "render.deck.directory",
+      "deck bundle is missing, non-directory, or a symlink: \{plan.bundle_dir}",
+    )
+  }
+  if !is_real_regular_no_follow(plan.deck_path) {
+    return render_preflight_failed(
+      "render.deck.file",
+      "deck.html is missing, non-regular, or a symlink: \{plan.deck_path}",
+    )
+  }
+  guard read_regular_text(plan.deck_path) is Some(html) && !html.is_empty() else {
+    return render_preflight_failed(
+      "render.deck.file",
+      "deck.html is empty or unreadable: \{plan.deck_path}",
+    )
+  }
+  let assets = list_assets(plan.bundle_dir)
+  let report = validate_deck(html, plan.project, assets)
+  if !report.ok() {
+    return render_preflight_failed("render.deck.invalid", report.render())
+  }
+  let source_pages = scan_deck(clean_doc(html.to_array())).length()
+  if source_pages < 1 || source_pages > max_render_pages {
+    return render_preflight_failed(
+      "render.pages.source",
+      "source deck page count must be in 1..=\{max_render_pages}; got \{source_pages}",
+    )
+  }
+
+  let browser_result = run(["chromiumfish", "path"])
+  if browser_result.code != 0 {
+    return render_preflight_failed(
+      "render.browser.resolve",
+      render_command_detail(browser_result),
+    )
+  }
+  let browser = browser_result.stdout.trim().to_owned()
+  if !browser.has_prefix("/") || !is_real_regular_no_follow(browser) {
+    return render_preflight_failed(
+      "render.browser.path", "chromiumfish path did not resolve to an absolute real regular file",
+    )
+  }
+
+  let font_result = run([
+    "fc-match", "--format=%{family}\\n", "Noto Sans CJK JP",
+  ])
+  if font_result.code != 0 {
+    return render_preflight_failed(
+      "render.font.resolve",
+      render_command_detail(font_result),
+    )
+  }
+  if font_result.stdout.trim().to_owned() != "Noto Sans CJK JP" {
+    return render_preflight_failed(
+      "render.font.missing", "fc-match did not resolve Noto Sans CJK JP",
+    )
+  }
+
+  let profile_error : String? = try {
+    recreate_stage(plan.publication())
+    @fs.mkdir(plan.profile_dir)
+    None
+  } catch {
+    error => Some("\{error}")
+  } noraise {
+    result => result
+  }
+  match profile_error {
+    Some(error) =>
+      return render_preflight_failed(
+        "render.profile.create",
+        "could not create isolated Chromium profile: \{error}",
+      )
+    None => ()
+  }
+  if !is_real_directory_no_follow(plan.profile_dir) {
+    return render_preflight_failed(
+      "render.profile.create", "isolated Chromium profile is not a real directory",
+    )
+  }
+
+  guard build_dump_dom_argv(plan, browser, timeout_secs~) is Some(argv) else {
+    return render_preflight_failed(
+      "render.dom.argv", "could not construct Chromium DOM command",
+    )
+  }
+  let dom_result = run(argv)
+  if dom_result.code == 124 {
+    return render_preflight_failed(
+      "render.dom.timeout", "Chromium DOM probe exceeded its bounded runtime",
+    )
+  }
+  if dom_result.code != 0 {
+    return render_preflight_failed(
+      "render.dom.exec",
+      render_command_detail(dom_result),
+    )
+  }
+  if !is_real_directory_no_follow(plan.profile_dir) {
+    return render_preflight_failed(
+      "render.profile.swapped", "isolated Chromium profile ceased to be a real directory",
+    )
+  }
+  let dom = dom_result.stdout
+  if dom.trim().is_empty() {
+    return render_preflight_failed(
+      "render.dom.empty", "Chromium returned an empty DOM",
+    )
+  }
+  let dom_pages = scan_deck(clean_doc(dom.to_array())).length()
+  if dom_pages < 1 || dom_pages > max_render_pages {
+    return render_preflight_failed(
+      "render.dom.page_count",
+      "browser DOM page count must be in 1..=\{max_render_pages}; got \{dom_pages}",
+    )
+  }
+  if dom_pages != source_pages {
+    return render_preflight_failed(
+      "render.dom.mismatch",
+      "source deck has \{source_pages} pages but browser DOM has \{dom_pages}",
+    )
+  }
+  PreflightReady(RenderContext::{ plan, browser, page_count: dom_pages })
+}
+
+///|
+/// Production Chromium preflight for one named committed deck. Name/root
+/// rejection is deterministic and happens before filesystem or process access;
+/// M3.2c consumes the ready context for sequential fixed-page capture.
+pub async fn preflight_render(
+  root : String,
+  project : String,
+  timeout_secs? : Int = default_render_timeout_secs,
+) -> RenderPreflightOutcome {
+  guard plan_render(root, project) is Some(plan) else {
+    return render_preflight_failed(
+      "render.project", "render project must be a non-dot representable direct-child name under an absolute root",
+    )
+  }
+  preflight_render_with(plan, run=run_render_command, timeout_secs~)
 }
 
 ///|

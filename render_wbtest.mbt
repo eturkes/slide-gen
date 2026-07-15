@@ -10,6 +10,92 @@ fn test_render_plan(root : String, project : String) -> RenderPlan {
 }
 
 ///|
+/// Validator-clean static deck fixture with an arbitrary positive slide count.
+/// It uses no assets, claims, or kanji so render tests stay focused on the
+/// browser boundary.
+fn render_test_deck(project : String, page_count : Int) -> String {
+  let out = StringBuilder::new()
+  out.write_string(
+    "<!doctype html>\n<html lang=\"ja\">\n<head><meta charset=\"utf-8\"><style>body{}</style></head>\n<body>\n",
+  )
+  for page in 1..<=page_count {
+    out.write_string(
+      "<section class=\"slide\"><div class=\"eyebrow\"><span class=\"n\">\{two_digit(page)}</span><span>label</span></div><div class=\"entry\"><div class=\"jp\">a</div><div class=\"jpf\">a</div><div class=\"en\">a</div></div><div class=\"pageno\">\{project} \u{b7} \{page} / \{page_count}</div></section>\n",
+    )
+  }
+  out.write_string("</body>\n</html>\n")
+  out.to_string()
+}
+
+///|
+/// Small browser-DOM fixture whose only real slides are the requested balanced
+/// section.slide elements.
+fn render_test_dom(page_count : Int) -> String {
+  let out = StringBuilder::new()
+  out.write_string("<html><head></head><body>")
+  for _ in 0..<page_count {
+    out.write_string("<section class=\"slide\"></section>")
+  }
+  out.write_string("</body></html>")
+  out.to_string()
+}
+
+///|
+/// Seed one real no-follow bundle directory and deck.html.
+async fn write_render_test_deck(plan : RenderPlan, html : String) -> Unit {
+  if !is_real_directory_no_follow(plan.bundle_dir) {
+    @fs.mkdir(plan.bundle_dir, recursive=true)
+  }
+  @fs.write_file(plan.deck_path, html, create_mode=CreateOrTruncate)
+}
+
+///|
+/// Compact injected command result fixture.
+fn render_command_result(
+  code : Int,
+  stdout? : String = "",
+  stderr? : String = "",
+) -> RenderCommandResult {
+  RenderCommandResult::{ code, stdout, stderr }
+}
+
+///|
+/// Feed preflight a finite response queue while recording every exact argv. An
+/// unexpected extra process aborts immediately; an early filesystem/validator
+/// failure consumes an intentionally empty queue.
+async fn queued_render_preflight(
+  plan : RenderPlan,
+  responses : Array[RenderCommandResult],
+  calls : Array[Array[String]],
+  timeout_secs? : Int = 5,
+) -> RenderPreflightOutcome {
+  let mut next = 0
+  async fn run(argv : Array[String]) -> RenderCommandResult {
+    ignore(@fs.exists(plan.bundle_dir))
+    calls.push(argv)
+    guard next < responses.length() else {
+      abort("render preflight issued an unexpected process")
+    }
+    let response = responses[next]
+    next = next + 1
+    response
+  }
+
+  let outcome = preflight_render_with(plan, run~, timeout_secs~)
+  assert_eq(next, responses.length())
+  outcome
+}
+
+///|
+/// Unwrap the expected controlled-failure branch.
+fn render_preflight_failure(outcome : RenderPreflightOutcome) -> RenderFailure {
+  match outcome {
+    PreflightFailed(failure) => failure
+    PreflightReady(_) => abort("expected render preflight failure")
+  }
+}
+
+///|
 /// The direct-child policy rejects traversal/reserved dot names and the shared
 /// unrepresentable classes while retaining ordinary internal punctuation,
 /// spaces, quotes, and non-ASCII.
@@ -114,8 +200,9 @@ test "Chromium DOM and screenshot argv are exact and bounded" {
     ),
     content=[
       "timeout", "--kill-after=30", "45", "/opt/Chromium Fish/chrome", "--headless=new",
-      "--no-sandbox", "--disable-gpu", "--force-device-scale-factor=1", "--window-size=2560,1440",
-      "--hide-scrollbars", "--user-data-dir=/w/My Root/renders/.partial/rehab's 道/.chromium-profile",
+      "--disable-field-trial-config", "--disable-breakpad", "--no-sandbox", "--disable-gpu",
+      "--force-device-scale-factor=1", "--window-size=2560,1440", "--hide-scrollbars",
+      "--user-data-dir=/w/My Root/renders/.partial/rehab's 道/.chromium-profile",
       "--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=<-loopback>", "--host-resolver-rules=MAP * ~NOTFOUND",
       "--disable-background-networking", "--disable-component-update", "--disable-default-apps",
       "--disable-sync", "--metrics-recording-only", "--no-first-run", "--dump-dom",
@@ -138,6 +225,303 @@ test "Chromium DOM and screenshot argv are exact and bounded" {
     "file:///w/My%20Root/renders/.partial/rehab%27s%20%E9%81%93/.page.html",
   )
   assert_true(build_screenshot_argv(plan, "/opt/chrome", 0) is None)
+}
+
+///|
+/// Bundle and deck entries must be real no-follow filesystem objects, and both
+/// unsafe markup and ordinary structural defects stop before tool resolution.
+async test "render preflight rejects unsafe input before every process" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-render-input")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+
+    let missing = test_render_plan(root, "missing")
+    let calls : Array[Array[String]] = []
+    let failure = render_preflight_failure(
+      queued_render_preflight(missing, [], calls),
+    )
+    assert_eq(failure.code, "render.deck.directory")
+    assert_eq(calls.length(), 0)
+
+    let linked = test_render_plan(root, "linked")
+    let outside = "\{root}/outside"
+    @fs.mkdir(outside)
+    @fs.mkdir(split_path(linked.bundle_dir).0, recursive=true)
+    @fs.symlink(linked.bundle_dir, target=outside)
+    let linked_calls : Array[Array[String]] = []
+    let linked_failure = render_preflight_failure(
+      queued_render_preflight(linked, [], linked_calls),
+    )
+    assert_eq(linked_failure.code, "render.deck.directory")
+    assert_eq(linked_calls.length(), 0)
+
+    let linked_file = test_render_plan(root, "linked-file")
+    @fs.mkdir(linked_file.bundle_dir)
+    let outside_deck = "\{root}/outside-deck.html"
+    @fs.write_file(
+      outside_deck,
+      render_test_deck(linked_file.project, 1),
+      create_mode=CreateOrTruncate,
+    )
+    @fs.symlink(linked_file.deck_path, target=outside_deck)
+    let file_calls : Array[Array[String]] = []
+    let file_failure = render_preflight_failure(
+      queued_render_preflight(linked_file, [], file_calls),
+    )
+    assert_eq(file_failure.code, "render.deck.file")
+    assert_eq(file_calls.length(), 0)
+
+    let unsafe_plan = test_render_plan(root, "unsafe")
+    let unsafe_html = render_test_deck(unsafe_plan.project, 1).replace(
+      old="<body>",
+      new="<body><script>location='https://example.invalid'</script>",
+    )
+    write_render_test_deck(unsafe_plan, unsafe_html)
+    let unsafe_calls : Array[Array[String]] = []
+    let unsafe_failure = render_preflight_failure(
+      queued_render_preflight(unsafe_plan, [], unsafe_calls),
+    )
+    assert_eq(unsafe_failure.code, "render.deck.invalid")
+    assert_true(unsafe_failure.detail.contains("static.active_markup"))
+    assert_eq(unsafe_calls.length(), 0)
+
+    let invalid = test_render_plan(root, "invalid")
+    let invalid_html = render_test_deck(invalid.project, 1).replace(
+      old="class=\"entry\"",
+      new="class=\"not-entry\"",
+    )
+    write_render_test_deck(invalid, invalid_html)
+    let invalid_calls : Array[Array[String]] = []
+    let invalid_failure = render_preflight_failure(
+      queued_render_preflight(invalid, [], invalid_calls),
+    )
+    assert_eq(invalid_failure.code, "render.deck.invalid")
+    assert_true(invalid_failure.detail.contains("slide.no_entry"))
+    assert_eq(invalid_calls.length(), 0)
+  }
+}
+
+///|
+/// Tool resolution is ordered after deterministic deck validation. A missing
+/// shim, unusable resolved path, missing fontconfig tool, or fallback font each
+/// receives one stable failure class and never reaches Chromium.
+async test "render preflight classifies missing browser and font surfaces" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-render-tools")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = test_render_plan(root, "project")
+    write_render_test_deck(plan, render_test_deck(plan.project, 1))
+    let browser = "\{root}/chrome"
+    @fs.write_file(browser, "stub", create_mode=CreateOrTruncate)
+
+    let missing_calls : Array[Array[String]] = []
+    let missing = render_preflight_failure(
+      queued_render_preflight(
+        plan,
+        [render_command_result(127, stderr="chromiumfish: not found")],
+        missing_calls,
+      ),
+    )
+    assert_eq(missing.code, "render.browser.resolve")
+    assert_eq(missing_calls.length(), 1)
+
+    let bad_path_calls : Array[Array[String]] = []
+    let bad_path = render_preflight_failure(
+      queued_render_preflight(
+        plan,
+        [render_command_result(0, stdout="\{root}/missing-browser\n")],
+        bad_path_calls,
+      ),
+    )
+    assert_eq(bad_path.code, "render.browser.path")
+    assert_eq(bad_path_calls.length(), 1)
+
+    let font_tool_calls : Array[Array[String]] = []
+    let font_tool = render_preflight_failure(
+      queued_render_preflight(
+        plan,
+        [
+          render_command_result(0, stdout="\{browser}\n"),
+          render_command_result(127, stderr="fc-match: not found"),
+        ],
+        font_tool_calls,
+      ),
+    )
+    assert_eq(font_tool.code, "render.font.resolve")
+    assert_eq(font_tool_calls.length(), 2)
+
+    let fallback_calls : Array[Array[String]] = []
+    let fallback = render_preflight_failure(
+      queued_render_preflight(
+        plan,
+        [
+          render_command_result(0, stdout="\{browser}\n"),
+          render_command_result(0, stdout="DejaVu Sans\n"),
+        ],
+        fallback_calls,
+      ),
+    )
+    assert_eq(fallback.code, "render.font.missing")
+    assert_eq(fallback_calls.length(), 2)
+  }
+}
+
+///|
+/// Passing preflight preserves exact tool/DOM argv, creates a real isolated
+/// profile, and counts only genuine section.slide nodes: comment, attribute,
+/// and wrong-tag class decoys remain inert.
+async test "render preflight resolves a decoy-safe matching browser DOM" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-render-ready")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = test_render_plan(root, "project")
+    write_render_test_deck(plan, render_test_deck(plan.project, 1))
+    let browser = "\{root}/chrome with space"
+    @fs.write_file(browser, "stub", create_mode=CreateOrTruncate)
+    let dom = "<!-- <section class=\"slide\"></section> --><div class=\"slide\"></div><p data-decoy=\"<section class='slide'>\"></p>" +
+      render_test_dom(1)
+    let calls : Array[Array[String]] = []
+    let outcome = queued_render_preflight(
+      plan,
+      [
+        render_command_result(0, stdout="\{browser}\n"),
+        render_command_result(0, stdout="Noto Sans CJK JP\n"),
+        render_command_result(0, stdout=dom),
+      ],
+      calls,
+      timeout_secs=17,
+    )
+    guard outcome is PreflightReady(context) else {
+      abort("matching DOM did not pass render preflight")
+    }
+    assert_eq(context.page_count, 1)
+    assert_eq(context.browser, browser)
+    assert_true(is_real_directory_no_follow(plan.profile_dir))
+    json_inspect(calls[0], content=["chromiumfish", "path"])
+    json_inspect(calls[1], content=[
+      "fc-match", "--format=%{family}\\n", "Noto Sans CJK JP",
+    ])
+    assert_eq(calls[2][0], "timeout")
+    assert_eq(calls[2][2], "17")
+    assert_eq(calls[2][3], browser)
+    assert_eq(calls[2][calls[2].length() - 2], "--dump-dom")
+    assert_eq(calls[2][calls[2].length() - 1], "file://\{plan.deck_path}")
+  }
+}
+
+///|
+/// Chromium nonzero/timeout/empty output, in-range parity drift, and an
+/// over-limit DOM are distinct. A validator-clean 100-page source is rejected
+/// before tools, proving both sides of the 1..=99 bound.
+async test "render preflight classifies every DOM page-count failure" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-render-dom")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = test_render_plan(root, "project")
+    write_render_test_deck(plan, render_test_deck(plan.project, 1))
+    let browser = "\{root}/chrome"
+    @fs.write_file(browser, "stub", create_mode=CreateOrTruncate)
+
+    let nonzero = render_preflight_failure(
+      queued_render_preflight(
+        plan,
+        [
+          render_command_result(0, stdout="\{browser}"),
+          render_command_result(0, stdout="Noto Sans CJK JP"),
+          render_command_result(7, stderr="browser failed"),
+        ],
+        [],
+      ),
+    )
+    assert_eq(nonzero.code, "render.dom.exec")
+    assert_eq(nonzero.detail, "browser failed")
+
+    let timeout = render_preflight_failure(
+      queued_render_preflight(
+        plan,
+        [
+          render_command_result(0, stdout="\{browser}"),
+          render_command_result(0, stdout="Noto Sans CJK JP"),
+          render_command_result(124),
+        ],
+        [],
+      ),
+    )
+    assert_eq(timeout.code, "render.dom.timeout")
+
+    let empty = render_preflight_failure(
+      queued_render_preflight(
+        plan,
+        [
+          render_command_result(0, stdout="\{browser}"),
+          render_command_result(0, stdout="Noto Sans CJK JP"),
+          render_command_result(0, stdout=" \n\t"),
+        ],
+        [],
+      ),
+    )
+    assert_eq(empty.code, "render.dom.empty")
+
+    let mismatch = render_preflight_failure(
+      queued_render_preflight(
+        plan,
+        [
+          render_command_result(0, stdout="\{browser}"),
+          render_command_result(0, stdout="Noto Sans CJK JP"),
+          render_command_result(0, stdout=render_test_dom(2)),
+        ],
+        [],
+      ),
+    )
+    assert_eq(mismatch.code, "render.dom.mismatch")
+    assert_eq(mismatch.detail, "source deck has 1 pages but browser DOM has 2")
+
+    let dom_over = render_preflight_failure(
+      queued_render_preflight(
+        plan,
+        [
+          render_command_result(0, stdout="\{browser}"),
+          render_command_result(0, stdout="Noto Sans CJK JP"),
+          render_command_result(0, stdout=render_test_dom(100)),
+        ],
+        [],
+      ),
+    )
+    assert_eq(dom_over.code, "render.dom.page_count")
+
+    write_render_test_deck(plan, render_test_deck(plan.project, 100))
+    let source_calls : Array[Array[String]] = []
+    let source_over = render_preflight_failure(
+      queued_render_preflight(plan, [], source_calls),
+    )
+    assert_eq(source_over.code, "render.pages.source")
+    assert_eq(source_calls.length(), 0)
+  }
+}
+
+///|
+/// Explicit environment gate for the installed ChromiumFish/font surface. Both
+/// committed decks must pass the deterministic validator and browser parity
+/// probe at six pages; only their private ignored stages are cleaned afterward.
+async test "live Chromium DOM probe counts both committed six-page decks" {
+  guard @env.get_env_var("SLIDE_GEN_RENDER_LIVE") is Some(_) else { return }
+  guard find_repo_root() is Some(root) else {
+    abort("live render probe could not find the slide-gen root")
+  }
+  @async.with_task_group() <| group => {
+    for project in ["rehab", "spine-segmentation"] {
+      let plan = test_render_plan(root, project)
+      group.add_defer(() => remove_entry_no_follow(plan.stage_dir))
+      let outcome = preflight_render(root, project)
+      match outcome {
+        PreflightReady(context) => assert_eq(context.page_count, 6)
+        PreflightFailed(failure) =>
+          abort(
+            "\{project} render preflight failed: \{failure.code}: \{failure.detail}",
+          )
+      }
+    }
+  }
 }
 
 ///|

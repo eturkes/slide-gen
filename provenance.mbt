@@ -206,12 +206,52 @@ fn resolve_src(path : String, base : String) -> String {
 }
 
 ///|
+/// Lexically clean a slash-delimited path with Go `path.Clean` semantics.
+/// Empty and `.` segments disappear; `..` pops a preceding ordinary segment,
+/// remains visible when it would escape a relative path, and stops at an
+/// absolute root. Repeated and trailing slashes collapse, absoluteness is
+/// preserved, and an empty relative result becomes `.`. The operation is pure
+/// and idempotent; it deliberately does not resolve symlinks.
+fn normalize_path(path : String) -> String {
+  let absolute = path.has_prefix("/")
+  let segments : Array[String] = []
+  for view in path.split("/") {
+    let segment = view.to_owned()
+    if segment == "" || segment == "." {
+      continue
+    }
+    if segment == ".." {
+      if segments.length() > 0 && segments[segments.length() - 1] != ".." {
+        ignore(segments.pop())
+      } else if !absolute {
+        segments.push(segment)
+      }
+    } else {
+      segments.push(segment)
+    }
+  }
+  if segments.length() == 0 {
+    return if absolute { "/" } else { "." }
+  }
+  let out = StringBuilder::new()
+  if absolute {
+    out.write_char('/')
+  }
+  for i, segment in segments {
+    if i > 0 {
+      out.write_char('/')
+    }
+    out.write_string(segment)
+  }
+  out.to_string()
+}
+
+///|
 /// Whether `path` lies at or under `dir`, matched at a segment boundary so a
 /// sibling sharing a name prefix (`/b` vs `/bx`) is not counted inside. Trailing
-/// slashes on `dir` are stripped first, so a caller that spells `bundle_dir` with
-/// a trailing `/` still anchors the boundary — otherwise a plain self-citation
-/// slips past the prefix test. Guards the self-citation check: a row must cite a
-/// source OUTSIDE the generated bundle, never one of the bundle's own files.
+/// slashes on `dir` are stripped first, so a caller spelling a boundary with a
+/// trailing `/` still anchors it. Guards both normalized boundaries: a source
+/// must stay outside the generated deck home and inside the source base.
 fn is_inside(path : String, dir : String) -> Bool {
   let cs = dir.to_array()
   let mut n = cs.length()
@@ -226,16 +266,16 @@ fn is_inside(path : String, dir : String) -> Bool {
 /// Verify one schema-valid row's source reference against the cited file, pushing
 /// a `Must` finding (named by the row `id`) for each failure. A `gap` row is
 /// unverifiable and skipped. Otherwise `src` must parse as `path:Lstart-Lend`
-/// (`prov.src_range`), must resolve OUTSIDE the bundle (`prov.self_citation` — no
-/// row may cite a generated bundle file), must name an existing regular file
-/// (`prov.src_missing` — a missing path, or a directory or device that cannot be
-/// quoted), must span an in-bounds line range (`prov.src_range`),
-/// and that line slice must literally contain `quote` (`prov.quote`). This is an
-/// existence check that kills invented quotes and fabricated citations, NOT a
-/// truth check — misattribution and cherry-picking still pass to human review.
+/// (`prov.src_range`), normalize inside `src_base` (`prov.src_outside`), stay
+/// outside the whole generated `deck_home` (`prov.self_citation`), name an
+/// existing regular file (`prov.src_missing` — a missing path, directory, or
+/// device cannot be quoted), span an in-bounds line range (`prov.src_range`), and
+/// literally contain `quote` in that slice (`prov.quote`). This existence check
+/// kills invented quotes and fabricated citations, NOT misattribution or
+/// cherry-picking; those still pass to human review.
 async fn check_row(
   r : ProvRow,
-  bundle_dir : String,
+  deck_home : String,
   src_base : String,
   out : Report,
 ) -> Unit {
@@ -251,13 +291,19 @@ async fn check_row(
         ),
       )
     Some((path, start, end)) => {
-      let resolved = resolve_src(path, src_base)
-      if is_inside(resolved, bundle_dir) {
+      let resolved = normalize_path(resolve_src(path, src_base))
+      if is_inside(resolved, normalize_path(deck_home)) {
         out.findings.push(
           must(
             "prov.self_citation",
-            "row \{r.id}: src cites a file inside the bundle",
+            "row \{r.id}: src cites a generated deck file",
           ),
+        )
+        return
+      }
+      if !is_inside(resolved, normalize_path(src_base)) {
+        out.findings.push(
+          must("prov.src_outside", "row \{r.id}: src escapes the source base"),
         )
         return
       }
@@ -324,13 +370,13 @@ async fn check_row(
 /// otherwise, covering both a syntax error and a non-array top level); each row
 /// is schema-checked via `parse_row` (a failing row pushes `prov.schema` with its
 /// reason) and, when schema-valid, source-checked via `check_row` against files
-/// under `src_base` (self-citations resolved relative to `bundle_dir`). This is
-/// `async` because `check_row` reads the cited source files. Returns the set of
-/// schema-valid row ids (empty on a parse failure) for the deck cross-reference to
-/// match `data-claim` attributes against.
+/// under `src_base` (self-citations rejected across the whole `deck_home`). This
+/// is `async` because `check_row` reads the cited source files. Returns the set
+/// of schema-valid row ids (empty on a parse failure) for the deck cross-reference
+/// to match `data-claim` attributes against.
 async fn check_provenance(
   prov_text : String,
-  bundle_dir : String,
+  deck_home : String,
   src_base : String,
   out : Report,
 ) -> @set.Set[String] {
@@ -352,7 +398,7 @@ async fn check_provenance(
       Invalid(reason) => out.findings.push(must("prov.schema", reason))
       Valid(r) => {
         ids.add(r.id)
-        check_row(r, bundle_dir, src_base, out)
+        check_row(r, deck_home, src_base, out)
       }
     }
   }
@@ -513,19 +559,22 @@ fn check_deck_crossref(
 /// cross-reference (every deck `data-claim` names a schema-valid row). A missing
 /// `provenance.json` or `gaps.md` is itself a `Must` finding (`prov.missing` /
 /// `gaps.missing`) — a bundle must ship both. `src_base` is the root the
-/// provenance source paths resolve against; the per-row source and quote checks
-/// read the cited files under it. Raises if `deck.html` is unreadable.
+/// provenance source paths resolve against; `deck_home` is the whole generated
+/// decks tree, which no row may cite. The per-row source and quote checks read
+/// only lexically confined files under `src_base`. Raises if `deck.html` is
+/// unreadable.
 pub async fn validate_bundle_dir(
   bundle_dir : String,
   slug : String,
   src_base : String,
+  deck_home : String,
 ) -> Report {
   let html = @fs.read_file("\{bundle_dir}/deck.html").text()
   let assets = list_assets(bundle_dir)
   let out = validate_deck(html, slug, assets)
   let prov_path = "\{bundle_dir}/provenance.json"
   let row_ids : @set.Set[String] = if @fs.exists(prov_path) {
-    check_provenance(@fs.read_file(prov_path).text(), bundle_dir, src_base, out)
+    check_provenance(@fs.read_file(prov_path).text(), deck_home, src_base, out)
   } else {
     out.findings.push(must("prov.missing", "bundle has no provenance.json"))
     @set.Set([])

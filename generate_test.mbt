@@ -23,6 +23,16 @@ test "build_codex_argv defaults to the generous ceiling" {
 }
 
 ///|
+/// GNU `timeout 0` disables its ceiling, so zero and negative overrides both
+/// fall back to the positive default rather than creating an unbounded run.
+test "build_codex_argv clamps non-positive timeout ceilings" {
+  let zero = build_codex_argv("/w/Projects", timeout_secs=0)
+  let negative = build_codex_argv("/w/Projects", timeout_secs=-10)
+  assert_eq(zero[2], default_timeout_secs.to_string())
+  assert_eq(negative[2], default_timeout_secs.to_string())
+}
+
+///|
 /// The dry run prints the resolved plan paths (source, template, stage, deck,
 /// cwd), the exact argv, and the full stdin prompt — everything a live run would
 /// use, with zero codex spend. The stage lives under the reserved

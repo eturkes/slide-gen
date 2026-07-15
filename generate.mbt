@@ -69,18 +69,20 @@ fn join_path(base : String, child : String) -> String {
 /// repo parent, which is also the provenance `src_base`). The whole invocation
 /// is wrapped in `timeout --kill-after` — SIGTERM at the ceiling, then SIGKILL a
 /// short grace later — so even a run that ignores SIGTERM is force-killed rather
-/// than hanging the caller forever (callers pass a positive `timeout_secs`;
-/// `timeout 0` would disable the kill). The prompt is delivered on stdin, not in
-/// argv, so it never appears here. `cwd` is a resolved repo-parent path and the
-/// vector is exec'd directly (no shell), so the argv itself needs no quoting.
+/// than hanging the caller forever. A non-positive override falls back to the
+/// positive default because GNU `timeout 0` disables the kill. The prompt is
+/// delivered on stdin, not in argv, so it never appears here. `cwd` is a resolved
+/// repo-parent path and the vector is exec'd directly (no shell), so the argv
+/// itself needs no quoting.
 pub fn build_codex_argv(
   cwd : String,
   timeout_secs? : Int = default_timeout_secs,
 ) -> Array[String] {
+  let secs = if timeout_secs <= 0 { default_timeout_secs } else { timeout_secs }
   [
     "timeout",
     "--kill-after=30",
-    timeout_secs.to_string(),
+    secs.to_string(),
     "codex",
     "exec",
     "--dangerously-bypass-approvals-and-sandbox",

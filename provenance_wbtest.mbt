@@ -168,6 +168,52 @@ test "resolve_src and is_inside anchor paths" {
 }
 
 ///|
+/// `normalize_path` follows the full planned edge table: empty and dot-only
+/// relatives become `.`, repeated/trailing separators collapse, parent segments
+/// fold without escaping an absolute root, and relative leading parents remain
+/// visible for the confinement check.
+test "normalize_path cleans lexical path edges" {
+  let cases : Array[(String, String)] = [
+    ("", "."),
+    (".", "."),
+    ("/", "/"),
+    ("//", "/"),
+    ("a//b", "a/b"),
+    ("a/", "a"),
+    ("/../", "/"),
+    ("a/..", "."),
+    ("./a", "a"),
+    ("a/./b", "a/b"),
+    ("a/b/../../c", "c"),
+    ("/x/../y", "/y"),
+    ("../../etc", "../../etc"),
+  ]
+  for case in cases {
+    let (path, want) = case
+    assert_eq(normalize_path(path), want)
+  }
+}
+
+///|
+/// Lexical cleaning is idempotent across the generated Cartesian product of
+/// ordinary, Unicode, empty, dot, and parent segments with repeated separators.
+test "normalize_path is idempotent over generated segment strings" {
+  let atoms = ["", ".", "..", "a", "b", "é", "道"]
+  for absolute in [false, true] {
+    let prefix = if absolute { "/" } else { "" }
+    for a in atoms {
+      for b in atoms {
+        for c in atoms {
+          let path = "\{prefix}\{a}//\{b}/\{c}/"
+          let once = normalize_path(path)
+          assert_eq(normalize_path(once), once)
+        }
+      }
+    }
+  }
+}
+
+///|
 /// `find_data_claims` collects `data-claim` values at every nesting depth in
 /// document order — an outer element, a nested child, and a void `<img>` — and
 /// walks tag by tag so close tags are skipped.

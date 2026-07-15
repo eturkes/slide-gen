@@ -58,7 +58,7 @@ async test "validate_bundle_dir over seeded bundles" {
       Some(good),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(clean, "project", root).codes(), content=[])
+    json_inspect(validate_bundle_dir(clean, "project", root, root).codes(), content=[])
     // Missing provenance.json.
     let noprov = make_bundle(
       root,
@@ -67,7 +67,7 @@ async test "validate_bundle_dir over seeded bundles" {
       None,
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(noprov, "project", root).codes(), content=[
+    json_inspect(validate_bundle_dir(noprov, "project", root, root).codes(), content=[
       "prov.missing",
     ])
     // A non-array JSON top level.
@@ -78,7 +78,7 @@ async test "validate_bundle_dir over seeded bundles" {
       Some("{}"),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(objprov, "project", root).codes(), content=[
+    json_inspect(validate_bundle_dir(objprov, "project", root, root).codes(), content=[
       "prov.parse",
     ])
     // Malformed JSON.
@@ -89,7 +89,7 @@ async test "validate_bundle_dir over seeded bundles" {
       Some("{"),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(badjson, "project", root).codes(), content=[
+    json_inspect(validate_bundle_dir(badjson, "project", root, root).codes(), content=[
       "prov.parse",
     ])
     // A schema-invalid row (unknown status).
@@ -100,12 +100,12 @@ async test "validate_bundle_dir over seeded bundles" {
       Some(bad_row),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(badrow, "project", root).codes(), content=[
+    json_inspect(validate_bundle_dir(badrow, "project", root, root).codes(), content=[
       "prov.schema",
     ])
     // Missing gaps.md.
     let nogaps = make_bundle(root, "nogaps", Some(deck), Some(good), None)
-    json_inspect(validate_bundle_dir(nogaps, "project", root).codes(), content=[
+    json_inspect(validate_bundle_dir(nogaps, "project", root, root).codes(), content=[
       "gaps.missing",
     ])
     // Prose-only gaps.md discloses nothing.
@@ -116,9 +116,10 @@ async test "validate_bundle_dir over seeded bundles" {
       Some(good),
       Some("all covered\n"),
     )
-    json_inspect(validate_bundle_dir(prosegaps, "project", root).codes(), content=[
-      "gaps.empty",
-    ])
+    json_inspect(
+      validate_bundle_dir(prosegaps, "project", root, root).codes(),
+      content=["gaps.empty"],
+    )
   }
 }
 
@@ -133,104 +134,173 @@ fn prov_one(status : String, src : String, quote : String) -> String {
 /// `validate_bundle_dir`'s per-row source check: a verified row whose quote
 /// literally occurs in the cited line slice passes; a quote absent from that
 /// slice — even one present elsewhere in the file — fails `prov.quote`; a
-/// citation resolving inside the bundle, to a missing file, to a directory
-/// rather than a regular file, or past the file's line range fails its specific
-/// code; and a `gap` row skips the check entirely.
+/// citation resolving anywhere under the generated deck home, escaping the
+/// source base, naming a missing file or directory, or extending past the file's
+/// line range fails its specific code; and a `gap` row skips the check entirely.
 async test "validate_bundle_dir source and quote checks" {
   @async.with_task_group() <| group => {
     let root = @fs.tmpdir(prefix="slide-gen-prov-src")
     group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let src_base = "\{root}/sources"
+    let deck_home = "\{src_base}/decks"
+    @fs.mkdir(src_base)
+    @fs.mkdir(deck_home)
     let deck = envelope()
     @fs.write_file(
-      "\{root}/src.md",
+      "\{src_base}/src.md",
       "alpha\nbeta gamma\ndelta\n",
       create_mode=CreateOrTruncate,
     )
-    @fs.mkdir("\{root}/srcdir")
+    @fs.mkdir("\{src_base}/srcdir")
+    @fs.write_file(
+      "\{root}/outside.md",
+      "outside\n",
+      create_mode=CreateOrTruncate,
+    )
     // Clean: quote "beta" occurs in the cited line 2.
     let clean = make_bundle(
-      root,
+      deck_home,
       "clean",
       Some(deck),
       Some(prov_one("verified", "src.md:2-2", "beta")),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(clean, "project", root).codes(), content=[])
+    json_inspect(
+      validate_bundle_dir(clean, "project", src_base, deck_home).codes(),
+      content=[],
+    )
     // Quote absent from the file entirely.
     let badquote = make_bundle(
-      root,
+      deck_home,
       "badquote",
       Some(deck),
       Some(prov_one("verified", "src.md:2-2", "zzz")),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(badquote, "project", root).codes(), content=[
-      "prov.quote",
-    ])
+    json_inspect(
+      validate_bundle_dir(badquote, "project", src_base, deck_home).codes(),
+      content=["prov.quote"],
+    )
     // Quote in the file but off the cited line (line 3, not the cited line 2).
     let offline = make_bundle(
-      root,
+      deck_home,
       "offline",
       Some(deck),
       Some(prov_one("verified", "src.md:2-2", "delta")),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(offline, "project", root).codes(), content=[
-      "prov.quote",
-    ])
-    // Self-citation: a relative path resolving inside the bundle.
+    json_inspect(
+      validate_bundle_dir(offline, "project", src_base, deck_home).codes(),
+      content=["prov.quote"],
+    )
+    // Self-citation: a relative path resolving inside this bundle.
     let selfcite = make_bundle(
-      root,
+      deck_home,
       "selfcite",
       Some(deck),
-      Some(prov_one("verified", "selfcite/deck.html:1-1", "x")),
+      Some(prov_one("verified", "decks/selfcite/deck.html:1-1", "x")),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(selfcite, "project", root).codes(), content=[
-      "prov.self_citation",
-    ])
+    json_inspect(
+      validate_bundle_dir(selfcite, "project", src_base, deck_home).codes(),
+      content=["prov.self_citation"],
+    )
+    // Normalization closes a `..` re-entry spelling of this bundle.
+    let reentry = make_bundle(
+      deck_home,
+      "reentry",
+      Some(deck),
+      Some(prov_one("verified", "decks/reentry/../reentry/deck.html:1-1", "x")),
+      Some("no gaps\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(reentry, "project", src_base, deck_home).codes(),
+      content=["prov.self_citation"],
+    )
+    // The boundary covers sibling published decks, not only this bundle.
+    let sibling = make_bundle(
+      deck_home,
+      "sibling",
+      Some(deck),
+      Some(prov_one("verified", "decks/clean/deck.html:1-1", "x")),
+      Some("no gaps\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(sibling, "project", src_base, deck_home).codes(),
+      content=["prov.self_citation"],
+    )
+    // An absolute path outside src_base is rejected even when the file exists.
+    let absolute_escape = make_bundle(
+      deck_home,
+      "absolute-escape",
+      Some(deck),
+      Some(prov_one("verified", "\{root}/outside.md:1-1", "outside")),
+      Some("no gaps\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(absolute_escape, "project", src_base, deck_home).codes(),
+      content=["prov.src_outside"],
+    )
+    // A relative `..` escape is rejected after lexical normalization.
+    let relative_escape = make_bundle(
+      deck_home,
+      "relative-escape",
+      Some(deck),
+      Some(prov_one("verified", "../outside.md:1-1", "outside")),
+      Some("no gaps\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(relative_escape, "project", src_base, deck_home).codes(),
+      content=["prov.src_outside"],
+    )
     // Missing source file.
     let missing = make_bundle(
-      root,
+      deck_home,
       "missing",
       Some(deck),
       Some(prov_one("verified", "nope.md:1-1", "x")),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(missing, "project", root).codes(), content=[
-      "prov.src_missing",
-    ])
+    json_inspect(
+      validate_bundle_dir(missing, "project", src_base, deck_home).codes(),
+      content=["prov.src_missing"],
+    )
     // Line range past the end of the file.
     let oor = make_bundle(
-      root,
+      deck_home,
       "oor",
       Some(deck),
       Some(prov_one("verified", "src.md:50-60", "x")),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(oor, "project", root).codes(), content=[
-      "prov.src_range",
-    ])
+    json_inspect(
+      validate_bundle_dir(oor, "project", src_base, deck_home).codes(),
+      content=["prov.src_range"],
+    )
     // A directory exists but is not a regular file that can be quoted.
     let dircite = make_bundle(
-      root,
+      deck_home,
       "dircite",
       Some(deck),
       Some(prov_one("verified", "srcdir:1-1", "x")),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(dircite, "project", root).codes(), content=[
-      "prov.src_missing",
-    ])
+    json_inspect(
+      validate_bundle_dir(dircite, "project", src_base, deck_home).codes(),
+      content=["prov.src_missing"],
+    )
     // A gap row carries no verifiable source, so the check is skipped.
     let gap = make_bundle(
-      root,
+      deck_home,
       "gap",
       Some(deck),
       Some("[{\"id\":\"c1\",\"slide\":1,\"claim\":\"x\",\"status\":\"gap\"}]"),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(gap, "project", root).codes(), content=[])
+    json_inspect(
+      validate_bundle_dir(gap, "project", src_base, deck_home).codes(),
+      content=[],
+    )
   }
 }
 
@@ -275,7 +345,7 @@ async test "validate_bundle_dir deck cross-reference" {
       Some(prov_gap_rows(["c1"])),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(dangling, "project", root).codes(), content=[
+    json_inspect(validate_bundle_dir(dangling, "project", root, root).codes(), content=[
       "prov.dangling_claim",
     ])
     // A data-claim naming a schema-valid row is clean.
@@ -288,7 +358,7 @@ async test "validate_bundle_dir deck cross-reference" {
       Some(prov_gap_rows(["c1"])),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(tagged, "project", root).codes(), content=[])
+    json_inspect(validate_bundle_dir(tagged, "project", root, root).codes(), content=[])
     // A data-claim hidden inside an HTML comment is stripped before the
     // cross-ref runs, so it does not dangle. The inner `<a>` is load-bearing:
     // without real comment-stripping the tag walk's crude `<!` skip stops at the
@@ -307,7 +377,10 @@ async test "validate_bundle_dir deck cross-reference" {
       Some(prov_gap_rows(["c1"])),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(commented, "project", root).codes(), content=[])
+    json_inspect(
+      validate_bundle_dir(commented, "project", root, root).codes(),
+      content=[],
+    )
     // A data-claim naming a schema-invalid row: the row is excluded from the id
     // set, so the claim both fails schema and dangles.
     let invalid = make_bundle(
@@ -319,7 +392,7 @@ async test "validate_bundle_dir deck cross-reference" {
       Some("[{\"id\":\"c1\",\"slide\":1,\"claim\":\"x\",\"status\":\"maybe\"}]"),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(invalid, "project", root).codes(), content=[
+    json_inspect(validate_bundle_dir(invalid, "project", root, root).codes(), content=[
       "prov.schema", "prov.dangling_claim",
     ])
     // An unparseable provenance.json yields an empty id set, so every deck
@@ -333,9 +406,10 @@ async test "validate_bundle_dir deck cross-reference" {
       Some("{"),
       Some("no gaps\n"),
     )
-    json_inspect(validate_bundle_dir(parsefail, "project", root).codes(), content=[
-      "prov.parse", "prov.dangling_claim",
-    ])
+    json_inspect(
+      validate_bundle_dir(parsefail, "project", root, root).codes(),
+      content=["prov.parse", "prov.dangling_claim"],
+    )
   }
 }
 
@@ -365,7 +439,7 @@ async test "validate_bundle_dir coverage warnings" {
       Some(prov_gap_rows(["c1"])),
       Some("no gaps\n"),
     )
-    let untagged_report = validate_bundle_dir(untagged, "project", root)
+    let untagged_report = validate_bundle_dir(untagged, "project", root, root)
     json_inspect(untagged_report.codes(), content=["prov.untagged_number"])
     // The coverage warning is advisory: a bundle carrying only a Should finding
     // still passes, so a should()->must() regression would fail this `ok()`.
@@ -380,7 +454,7 @@ async test "validate_bundle_dir coverage warnings" {
     )
     @fs.mkdir("\{uncited}/assets")
     @fs.write_file("\{uncited}/assets/f.png", "x", create_mode=CreateOrTruncate)
-    let uncited_report = validate_bundle_dir(uncited, "project", root)
+    let uncited_report = validate_bundle_dir(uncited, "project", root, root)
     json_inspect(uncited_report.codes(), content=["prov.asset_uncited"])
     assert_true(uncited_report.ok())
     // A tagged number and a cited <img> pass clean.
@@ -398,6 +472,6 @@ async test "validate_bundle_dir coverage warnings" {
     )
     @fs.mkdir("\{clean}/assets")
     @fs.write_file("\{clean}/assets/f.png", "x", create_mode=CreateOrTruncate)
-    json_inspect(validate_bundle_dir(clean, "project", root).codes(), content=[])
+    json_inspect(validate_bundle_dir(clean, "project", root, root).codes(), content=[])
   }
 }

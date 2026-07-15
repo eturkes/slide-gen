@@ -4,14 +4,22 @@
 /// Build the root CLI command. `list` shows discovered sibling projects, `status`
 /// their enable/disable state, `enable`/`disable`/`toggle` mutate the persisted
 /// set for the named project, and `generate` authors a project's deck via codex
-/// (`--dry-run` previews the invocation). A subcommand is required; each
-/// project-scoped subcommand takes exactly one project-name positional.
+/// (`--dry-run` previews the invocation). A subcommand is required. Mutations
+/// take exactly one project name; `generate` accepts zero or one, with omission
+/// selecting every enabled project.
 pub fn cli() -> @argparse.Command {
   let name_arg = [
     @argparse.PositionArg(
       "name",
       about="Sibling project directory name.",
       num_args=@argparse.ValueRange::single(),
+    ),
+  ]
+  let optional_name_arg = [
+    @argparse.PositionArg(
+      "name",
+      about="Sibling project directory name; omit for all enabled projects.",
+      num_args=@argparse.ValueRange(lower=0, upper=1),
     ),
   ]
   @argparse.Command(
@@ -41,7 +49,7 @@ pub fn cli() -> @argparse.Command {
       ),
       @argparse.Command(
         "generate",
-        about="Generate a sibling project's deck via codex (--dry-run previews).",
+        about="Generate one sibling deck or every enabled deck via codex.",
         flags=[
           @argparse.FlagArg(
             "dry-run",
@@ -49,7 +57,7 @@ pub fn cli() -> @argparse.Command {
             about="Print the exact codex invocation and prompt without running it.",
           ),
         ],
-        positionals=name_arg,
+        positionals=optional_name_arg,
       ),
     ],
   )

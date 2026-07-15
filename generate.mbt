@@ -43,6 +43,16 @@ pub enum GenOutcome {
 }
 
 ///|
+/// One rendered batch result. `code == 0` is a successful project; every other
+/// code contributes one failure to the aggregate status. Messages retain the
+/// single-project renderer's detail.
+priv struct BatchItem {
+  project : String
+  message : String
+  code : Int
+}
+
+///|
 /// One tracked porcelain-v1 status entry. The key preserves both status columns
 /// and every NUL-delimited path so baseline comparison notices status
 /// transitions as well as path additions/removals; the paths array supports a
@@ -528,12 +538,14 @@ async fn run_codex(plan : GenPlan) -> (Int, String, String) {
 }
 
 ///|
-/// Generate one project with the production Codex producer and the pre-publish
-/// tracked-status tripwire. The baseline is captured before stage recreation or
-/// Codex execution; staged/published changes under decks/ are intentionally
-/// excluded from the comparison.
-pub async fn generate_project(root : String, project : String) -> GenOutcome {
-  let baseline = tracked_git_status(root)
+/// Generate one project against an already captured tracked-status baseline.
+/// Batch generation shares one pre-batch snapshot so an escaped write from an
+/// earlier project cannot become a later project's accepted baseline.
+async fn generate_project_from_baseline(
+  root : String,
+  project : String,
+  baseline : String?,
+) -> GenOutcome {
   let plan = plan_generate(root, project)
   async fn confine(p : GenPlan) -> String? {
     check_tracked_confinement(p, baseline)
@@ -545,6 +557,14 @@ pub async fn generate_project(root : String, project : String) -> GenOutcome {
     postprocess=run_furigana,
     confine~,
   )
+}
+
+///|
+/// Generate one named project with the production Codex producer and a baseline
+/// captured before stage recreation or execution. Staged/published changes under
+/// decks/ are intentionally excluded from the tracked-status comparison.
+pub async fn generate_project(root : String, project : String) -> GenOutcome {
+  generate_project_from_baseline(root, project, tracked_git_status(root))
 }
 
 ///|
@@ -680,4 +700,97 @@ pub async fn render_dry_run(
 ) -> String {
   let plan = plan_generate(root, project)
   render_dry_run_text(plan, load_prompt(plan), timeout_secs)
+}
+
+///|
+/// Render per-project results plus one deterministic aggregate line. Every
+/// message owns exactly one trailing newline; entries are separated by one
+/// blank line. Any failed item maps the whole batch to runtime exit 1.
+fn render_batch(items : Array[BatchItem]) -> (String, Int) {
+  let sb = StringBuilder::new()
+  let mut succeeded = 0
+  let mut failed = 0
+  for i, item in items {
+    if i > 0 {
+      sb.write_string("\n")
+    }
+    if item.code == 0 {
+      succeeded = succeeded + 1
+      sb.write_string("[OK] ")
+    } else {
+      failed = failed + 1
+      sb.write_string("[FAILED] ")
+    }
+    sb.write_string(item.project)
+    sb.write_string("\n")
+    sb.write_string(final_newline(item.message))
+  }
+  if items.length() > 0 {
+    sb.write_string("\n")
+  }
+  sb.write_string(
+    "summary: \{succeeded} succeeded, \{failed} failed, \{items.length()} total\n",
+  )
+  (sb.to_string(), if failed == 0 { 0 } else { 1 })
+}
+
+///|
+/// Dispatch every currently discovered enabled project sequentially in the
+/// discovery order, catching one project's runtime error before proceeding to
+/// the next. State entries no longer present in discovery are never passed to
+/// the producer; they become sorted failures with an exact cleanup command.
+/// Disabled projects are absent from both dispatch and summary.
+async fn run_enabled_batch(
+  projects : Array[String],
+  enabled : @set.Set[String],
+  run~ : async (String) -> (String, Int),
+) -> (String, Int) {
+  let items : Array[BatchItem] = []
+  let candidates : @set.Set[String] = @set.Set(projects[:])
+  for project in projects {
+    if !enabled.contains(project) {
+      continue
+    }
+    let (message, code) = try run(project) catch {
+      error => ("project failed: \{error}", 1)
+    } noraise {
+      result => result
+    }
+    items.push(BatchItem::{ project, message, code })
+  }
+  let stale = enabled
+    .to_array()
+    .filter(fn(project) { !candidates.contains(project) })
+  stale.sort_by(lex_compare)
+  for project in stale {
+    items.push(BatchItem::{
+      project,
+      message: "enabled project is missing; run `slide-gen disable -- \{shell_quote(project)}` to clear it",
+      code: 1,
+    })
+  }
+  render_batch(items)
+}
+
+///|
+/// Generate every project named by the persisted enabled set. A dry run renders
+/// each exact invocation without Codex spend; a live run delegates to the same
+/// retry/validate/promote path as named generation. Per-project failures remain
+/// isolated and the returned aggregate code is nonzero iff any item failed.
+pub async fn generate_enabled(
+  root : String,
+  projects : Array[String],
+  state_path : String,
+  dry_run? : Bool = false,
+) -> (String, Int) {
+  let baseline = if dry_run { None } else { tracked_git_status(root) }
+  async fn run(project : String) -> (String, Int) {
+    if dry_run {
+      (render_dry_run(root, project), 0)
+    } else {
+      render_outcome(generate_project_from_baseline(root, project, baseline))
+    }
+  }
+
+  run_enabled_batch(projects, read_state(state_path), run~)
 }

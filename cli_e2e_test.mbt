@@ -148,6 +148,7 @@ async test "generate dry-run end-to-end" {
     let repo = "\{projects_dir}/slide-gen"
     @fs.mkdir("\{repo}/templates", recursive=true)
     @fs.mkdir("\{projects_dir}/projA")
+    @fs.mkdir("\{projects_dir}/projB")
     @fs.write_file(
       "\{repo}/moon.mod",
       "name = \"eturkes/slide-gen\"\n",
@@ -161,6 +162,11 @@ async test "generate dry-run end-to-end" {
     @fs.write_file(
       "\{repo}/templates/deck.html",
       "<html>RUNTIME STYLE MARKER</html>\n",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
+      "\{repo}/enabled.txt",
+      "projA\nprojB\n",
       create_mode=CreateOrTruncate,
     )
 
@@ -183,6 +189,42 @@ async test "generate dry-run end-to-end" {
     // no blank final line doubling the renderer's own.
     assert_false(text.has_suffix("\n\n"))
 
+    // no positional -> every enabled candidate, still without codex spend.
+    let (code, out, err) = @process.collect_output(
+      bin,
+      ["generate", "--dry-run"],
+      cwd=repo,
+    )
+    assert_eq(code, 0, msg=err.text())
+    let batch = out.text()
+    assert_true(batch.contains("[OK] projA\n"))
+    assert_true(batch.contains("[OK] projB\n"))
+    assert_true(batch.contains("decks/.partial/projA"))
+    assert_true(batch.contains("decks/.partial/projB"))
+    assert_true(batch.contains("summary: 2 succeeded, 0 failed, 2 total\n"))
+
+    // A stale enabled name is reported without dispatch; valid projects still
+    // run, and the aggregate report survives the nonzero process exit on stdout.
+    @fs.write_file(
+      "\{repo}/enabled.txt",
+      "projA\nghost\nprojB\n",
+      create_mode=CreateOrTruncate,
+    )
+    let (code, out, err) = @process.collect_output(
+      bin,
+      ["generate", "--dry-run"],
+      cwd=repo,
+    )
+    assert_eq(code, 1)
+    assert_eq(err.text(), "")
+    let stale_batch = out.text()
+    assert_true(stale_batch.contains("[OK] projA\n"))
+    assert_true(stale_batch.contains("[OK] projB\n"))
+    assert_true(stale_batch.contains("[FAILED] ghost\n"))
+    assert_true(
+      stale_batch.contains("summary: 2 succeeded, 1 failed, 3 total\n"),
+    )
+
     // unknown project -> exit 1 like enable, message on stderr.
     let (code, _, err) = @process.collect_output(
       bin,
@@ -195,14 +237,11 @@ async test "generate dry-run end-to-end" {
 }
 
 ///|
-/// Explicit-spend smoke for the production Codex path. SLIDE_GEN_LIVE and the
-/// built-binary gate must both be present; ordinary moon test and just test runs
-/// return before setup. A tiny synthetic sibling project plus the shipped style
-/// contract keeps this about plumbing: Codex must exit through the harness and
-/// leave a non-empty deck.html in either the promoted or retained bundle. The
-/// fixture copies both runtime-loaded contracts plus the uv-locked authoring
-/// sidecar used by the production binary.
-async test "generate live codex smoke" {
+/// Explicit-spend acceptance gate for the production batch path. SLIDE_GEN_LIVE
+/// and the built-binary gate must both be present; ordinary test runs return
+/// before setup. Two enabled synthetic siblings plus the shipped contracts keep
+/// this about plumbing: both Codex runs must promote validator-clean bundles.
+async test "generate enabled batch live codex acceptance" {
   guard @env.get_env_var("SLIDE_GEN_LIVE") is Some(_) else { return }
   guard @env.get_env_var("SLIDE_GEN_BIN") is Some(bin) else { return }
   guard find_repo_root() is Some(source_root) else {
@@ -218,10 +257,12 @@ async test "generate live codex smoke" {
     group.add_defer(() => @fs.rmdir(tmp, recursive=true))
     let projects_dir = "\{tmp}/Projects"
     let repo = "\{projects_dir}/slide-gen"
-    let source = "\{projects_dir}/projA"
+    let source_a = "\{projects_dir}/projA"
+    let source_b = "\{projects_dir}/projB"
     @fs.mkdir("\{repo}/templates", recursive=true)
     @fs.mkdir("\{repo}/tools")
-    @fs.mkdir(source)
+    @fs.mkdir(source_a)
+    @fs.mkdir(source_b)
     @fs.write_file(
       "\{repo}/moon.mod",
       "name = \"eturkes/slide-gen\"\n",
@@ -249,8 +290,18 @@ async test "generate live codex smoke" {
       create_mode=CreateOrTruncate,
     )
     @fs.write_file(
-      "\{source}/README.md",
-      "# projA\n\nPurpose: a tiny fixture project for the slide generation smoke.\n",
+      "\{repo}/enabled.txt",
+      "projA\nprojB\n",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
+      "\{source_a}/README.md",
+      "# projA\n\nPurpose: verify the first enabled project reaches batch generation.\nStatus: the fixture is ready.\n",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.write_file(
+      "\{source_b}/README.md",
+      "# projB\n\nPurpose: verify a later enabled project still runs in the same batch.\nStatus: the fixture is ready.\n",
       create_mode=CreateOrTruncate,
     )
     let (init_code, _, init_err) = @process.collect_output(
@@ -281,18 +332,30 @@ async test "generate live codex smoke" {
 
     let (code, stdout, stderr) = @process.collect_output(
       bin,
-      ["generate", "projA"],
+      ["generate"],
       cwd=repo,
     )
-    assert_true(code == 0 || code == 1)
-    let published = "\{repo}/decks/projA"
-    let retained = "\{repo}/decks/.partial/projA"
-    let bundle = if @fs.exists(published) { published } else { retained }
-    let deck_path = "\{bundle}/deck.html"
-    assert_true(
-      @fs.exists(deck_path),
-      msg="live codex left no deck.html\nstdout:\{stdout.text()}\nstderr:\{stderr.text()}",
+    assert_eq(
+      code,
+      0,
+      msg="batch generation failed\nstdout:\{stdout.text()}\nstderr:\{stderr.text()}",
     )
-    assert_true(@fs.read_file(deck_path).binary().length() > 0)
+    assert_true(
+      stdout.text().contains("summary: 2 succeeded, 0 failed, 2 total"),
+    )
+    for project in ["projA", "projB"] {
+      let published = "\{repo}/decks/\{project}"
+      assert_true(
+        @fs.exists("\{published}/deck.html"),
+        msg="batch did not publish \{project}",
+      )
+      let report = validate_bundle_dir(
+        published,
+        project,
+        projects_dir,
+        "\{repo}/decks",
+      )
+      assert_true(report.ok(), msg=report.render())
+    }
   }
 }

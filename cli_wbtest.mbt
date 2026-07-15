@@ -15,7 +15,7 @@ test "cli help" {
       #|  enable    Enable a sibling project.
       #|  disable   Disable a sibling project (also clears a stale entry).
       #|  toggle    Flip a sibling project's enabled state.
-      #|  generate  Generate a sibling project's deck via codex (--dry-run previews).
+      #|  generate  Generate one sibling deck or every enabled deck via codex.
       #|  help      Print help for the subcommand(s).
       #|
       #|Options:

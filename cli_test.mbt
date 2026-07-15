@@ -28,9 +28,9 @@ test "subcommands parse with positionals" {
 }
 
 ///|
-/// `generate` parses to its key with the `name` positional bound, and `--dry-run`
-/// surfaces as a true flag; without the flag `generate` still parses with the
-/// flag absent, so `main` can distinguish a preview from a live run.
+/// `generate` accepts either one named project or no positional (the enabled-set
+/// batch), and `--dry-run` surfaces as a true flag in both forms. Without the
+/// flag it remains absent, so `main` can distinguish a preview from a live run.
 test "generate subcommand parses with dry-run flag" {
   guard cli().parse(argv=["generate", "--dry-run", "projA"]).subcommand
     is Some((key, sub))
@@ -40,4 +40,10 @@ test "generate subcommand parses with dry-run flag" {
   assert_true(sub.flags.get("dry-run") is Some(true))
   guard cli().parse(argv=["generate", "projB"]).subcommand is Some((_, plain))
   assert_false(plain.flags.get("dry-run") is Some(true))
+  guard cli().parse(argv=["generate", "--dry-run"]).subcommand
+    is Some((_, batch))
+  assert_true(batch.flags.get("dry-run") is Some(true))
+  assert_true(
+    batch.values.get("name") is None || batch.values.get("name") is Some([]),
+  )
 }

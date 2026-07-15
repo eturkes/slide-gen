@@ -679,3 +679,45 @@ test "render_outcome maps promote retain and exec failure" {
     ),
   )
 }
+
+///|
+/// Batch dispatch preserves discovery order, continues after one project fails,
+/// never calls the producer for disabled or stale state entries, reports the
+/// stale entry as a failure, and returns one aggregate nonzero status.
+async test "enabled batch isolates project failures and reports stale state" {
+  let calls : Array[String] = []
+  let enabled : @set.Set[String] = @set.Set(["projB", "ghost", "projA"])
+  async fn run(project : String) -> (String, Int) {
+    ignore(@fs.exists(project))
+    calls.push(project)
+    if project == "projA" {
+      ("codex failed", 1)
+    } else {
+      ("generated: deck.html, provenance.json, gaps.md\n", 0)
+    }
+  }
+
+  let (message, code) = run_enabled_batch(
+    ["projA", "projB", "projC"],
+    enabled,
+    run~,
+  )
+  assert_eq(code, 1)
+  json_inspect(calls, content=["projA", "projB"])
+  inspect(
+    message,
+    content=(
+      #|[FAILED] projA
+      #|codex failed
+      #|
+      #|[OK] projB
+      #|generated: deck.html, provenance.json, gaps.md
+      #|
+      #|[FAILED] ghost
+      #|enabled project is missing; run `slide-gen disable -- ghost` to clear it
+      #|
+      #|summary: 1 succeeded, 2 failed, 3 total
+      #|
+    ),
+  )
+}

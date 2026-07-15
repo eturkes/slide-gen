@@ -25,6 +25,17 @@ fn get_name(sub : @argparse.Matches) -> String {
 }
 
 ///|
+/// Pull `generate`'s optional `name` positional. Argparse may represent an
+/// omitted ranged positional as no map entry or an empty value array; both mean
+/// enabled-set batch mode.
+fn get_optional_name(sub : @argparse.Matches) -> String? {
+  match sub.values.get("name") {
+    Some(values) if values.length() > 0 => Some(values[0])
+    _ => None
+  }
+}
+
+///|
 /// Report a mutation's outcome: print the new state on success, or exit non-zero
 /// with a stderr message when the action was rejected (an unknown project for
 /// enable/toggle, or a name that is neither enabled nor a current sibling).
@@ -97,22 +108,38 @@ async fn main {
         )
       }
       Some(("generate", sub)) => {
-        let target = get_name(sub)
-        if !projects.contains(target) {
-          die(
-            "slide-gen: unknown project '\{target}' (run `slide-gen list` to see candidates)\n",
-            1,
-          )
-        }
-        match sub.flags.get("dry-run") {
-          Some(true) => @stdio.stdout.write(@lib.render_dry_run(root, target))
-          _ => {
-            let outcome = @lib.generate_project(root, target)
-            let (message, code) = @lib.render_outcome(outcome)
-            if code == 0 {
-              @stdio.stdout.write(message)
+        let dry_run = sub.flags.get("dry-run") is Some(true)
+        match get_optional_name(sub) {
+          Some(target) => {
+            if !projects.contains(target) {
+              die(
+                "slide-gen: unknown project '\{target}' (run `slide-gen list` to see candidates)\n",
+                1,
+              )
+            }
+            if dry_run {
+              @stdio.stdout.write(@lib.render_dry_run(root, target))
             } else {
-              die(message, code)
+              let outcome = @lib.generate_project(root, target)
+              let (message, code) = @lib.render_outcome(outcome)
+              if code == 0 {
+                @stdio.stdout.write(message)
+              } else {
+                die(message, code)
+              }
+            }
+          }
+          None => {
+            let (message, code) = @lib.generate_enabled(
+              root,
+              projects,
+              state_path,
+              dry_run~,
+            )
+            @stdio.stdout.write(message)
+            if code != 0 {
+              c_exit(code)
+              abort("unreachable: exit returned")
             }
           }
         }

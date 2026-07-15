@@ -14,11 +14,11 @@ Seed: commit `0526d53` (repo init: deck.html, agent guidance, `.agent` boilerpla
 
 ## Milestone ledger
 - **M1 CLI foundation** — discovery + toggle state (no codex, no render). STATUS: **REVIEWED**.
-- **M2 Generation** — `codex exec` per project → template-styled deck BUNDLE (`deck.html` + `provenance.json` + `gaps.md` + `figures.py` + `assets/*.png`), gated by a deterministic MoonBit validator. STATUS: **IN-PROGRESS** (16 units; detail below).
+- **M2 Generation** — `codex exec` per project → template-styled deck BUNDLE (`deck.html` + `provenance.json` + `gaps.md` + `figures.py` + `assets/*.png`), gated by a deterministic MoonBit validator. STATUS: **IMPLEMENTED** (16 units DONE; review pending).
 - **M3 Rendering** — `deck.html` → per-page PNG → PDF@72dpi; mirror prototype `render.py` (chromiumfish + raster, section count from DOM). STATUS: UNPLANNED.
-- **M4 Integration / packaging / docs** — end-to-end `run`, batch over enabled set, distribution, README, quality gates. STATUS: UNPLANNED.
+- **M4 Integration / packaging / docs** — end-to-end generate+render `run` over the enabled set, distribution, README, quality gates. STATUS: UNPLANNED.
 
-Plan each milestone in its own session when it becomes active (M3–M4 deferred per owner). M2's parked decisions were resolved at its plan (furigana · sandbox · input scope · output commit · codex-trust — see M2 §Decisions). Still parked for later planning: render DSF/DPI + raster-vs-vector (M3); end-to-end `run` + batch + distribution (M4).
+Plan each milestone in its own session when it becomes active (M3–M4 deferred per owner). M2's parked decisions were resolved at its plan (furigana · sandbox · input scope · output commit · codex-trust — see M2 §Decisions). Still parked for later planning: render DSF/DPI + raster-vs-vector (M3); end-to-end generate+render `run` orchestration + distribution (M4).
 
 ---
 
@@ -28,7 +28,7 @@ Units (all DONE): **M1.1** toolchain + scaffold · **M1.2** discovery · **M1.3*
 
 ---
 
-## M2 — Generation (IN-PROGRESS)
+## M2 — Generation (IMPLEMENTED)
 
 As-designed: `slide-gen generate [<project>]` drives `codex exec` (one shot per project) to author a deck BUNDLE at `decks/<project>/` — `deck.html` (template-styled) + `provenance.json` (per-claim source citations) + `gaps.md` (unverifiable / human-needed) + `figures.py` + `assets/*.png`. A deterministic MoonBit VALIDATOR gates every bundle (template conformance + provenance quote-grep + furigana structural guards); a project-local Python analyzer cross-checks furigana readings (hybrid). Deck CONTENT = codex's job (nondeterministic, env-gated + external `timeout`); the harness + validator are the testable MoonBit surface.
 
@@ -69,6 +69,6 @@ As-designed: `slide-gen generate [<project>]` drives `codex exec` (one shot per 
 
 - **M2.5 Furigana analyzer cross-check** [DONE] — uv-locked Fugashi+UniDic authoring sidecar with kana-anchored context alignment; idempotent structured review blocks; raw + postprocessed bundle tripwire/validation; controlled wrong/correct coverage and committed spine/rehab backfill. 106 MoonBit + 7 Python tests, 0-warn. Detail: code + `git log --grep "(M2.5"`.
 
-- **M2.6 Batch over enabled set + robustness** [OPEN] — `generate` with no arg → every enabled project (from state); per-project failure isolation (one failure ≠ abort the batch); a summary report; retry-once; timeout / partial-output handling; idempotent regenerate (overwrite). Tests: batch dispatch over a fixture enabled-set (dry-run, no live codex); failure-isolation behavior. Accept: processes every enabled project, isolates failures, prints a summary; a gated live run over ≥2 enabled projects lands validated bundles.
+- **M2.6 Batch over enabled set + robustness** [DONE] — optional project arg; no-arg sequential enabled dispatch with stale-state failures, per-project isolation, shared pre-batch confinement baseline, deterministic summary/exit; two-project dry-run + injected failure coverage; gated live batch promoted and independently revalidated both bundles. 107 MoonBit + 7 Python tests, 0-warn. Detail: code + `git log --grep "(M2.6"`.
 
 Sequence: M2.1a→b-i→b-ii→c→M2.2a-i→a-ii→b-i→b-ii (pure/async validators, no codex) → M2.3a (invocation + dry-run + CLI, deterministic) → M2.3b-i (path-norm + confinement + timeout ceiling) → M2.3b-ii (stage/confine/validate/promote/retry, stub bundles) → M2.3b-iii (live exec + confine tripwire + CLI + gitignore; live smoke env-gated) → M2.4a (prompt + FIRST passing live bundle) → M2.4b (rehab real-figure proof) → M2.5 (furigana analyzer) → M2.6 (batch). Gates: extend the justfile (existing `fmt`/`check`/`build`/`test` + the Python tool's lint/test + the env-gated live-codex test).

@@ -87,6 +87,68 @@ test "good envelope passes; commented decoys ignored" {
 }
 
 ///|
+/// Cleaning and tag discovery remain fail-closed around authored decoys: comment
+/// and raw-text openers inside quoted attributes cannot blank a later invalid
+/// image, and a stray text `<` cannot swallow that image's real opening tag.
+test "quoted cleaner decoys and stray text less-than cannot hide markup" {
+  let comment_decoy = envelope(
+    sections=slide_of(
+      eyebrow("01"),
+      entry() +
+      "<span title=\"<!--\">x</span><img src=\"bad.png\"><span title=\"-->\">y</span>",
+      pageno("project \u{b7} 1 / 1"),
+    ),
+  )
+  json_inspect(validate_deck(comment_decoy, "project", no_assets()).codes(), content=[
+    "img.not_asset",
+  ])
+  let raw_decoy = envelope(
+    sections=slide_of(
+      eyebrow("01"),
+      entry() +
+      "<span title=\"<style>\">x</span><img src=\"bad.png\"><span title=\"</style>\">y</span>",
+      pageno("project \u{b7} 1 / 1"),
+    ),
+  )
+  json_inspect(validate_deck(raw_decoy, "project", no_assets()).codes(), content=[
+    "img.not_asset",
+  ])
+  let stray = envelope(
+    sections=slide_of(
+      eyebrow("01"),
+      entry() + "<span>5 < 6</span><img src=\"bad.png\">",
+      pageno("project \u{b7} 1 / 1"),
+    ),
+  )
+  json_inspect(validate_deck(stray, "project", no_assets()).codes(), content=[
+    "img.not_asset",
+  ])
+}
+
+///|
+/// Frame tokens must be real markup, never strings inside quoted attributes.
+/// A doctype decoy cannot replace the declaration and a close-tag decoy cannot
+/// close an otherwise unclosed body.
+test "attribute literals cannot satisfy doctype or body-close checks" {
+  let doctype_decoy = envelope(
+    doctype="",
+    sections="<div title=\"<!doctype html>\"></div>" +
+      slide_of(eyebrow("01"), entry(), pageno("project \u{b7} 1 / 1")),
+  )
+  json_inspect(validate_deck(doctype_decoy, "project", no_assets()).codes(), content=[
+    "frame.doctype",
+  ])
+  let close_decoy = envelope(
+    sections="<div title=\"</body>\"></div>" +
+      slide_of(eyebrow("01"), entry(), pageno("project \u{b7} 1 / 1")),
+    body_close="",
+  )
+  json_inspect(validate_deck(close_decoy, "project", no_assets()).codes(), content=[
+    "frame.body",
+  ])
+}
+
+///|
 /// The public `Report` surface: a clean deck is `ok` and renders `ok`; a
 /// defective deck is not `ok` and renders a severity-labeled line.
 test "report ok and render" {

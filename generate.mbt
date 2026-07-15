@@ -27,6 +27,7 @@ priv struct GenPlan {
   prompt_contract : String
   furigana_tool : String
   stage_dir : String
+  backup_dir : String
   deck_dir : String
 }
 
@@ -63,6 +64,16 @@ priv struct GitStatusEntry {
 }
 
 ///|
+/// Tracked repository state used by the write tripwire. Porcelain status names
+/// ordinary transitions; the full HEAD-to-worktree patch fingerprint also
+/// notices content changes to a path that was already dirty under the same
+/// status key.
+priv struct GitSnapshot {
+  status : String
+  diff : String
+}
+
+///|
 /// Resolve the generation plan for `project` against the repo `root`. Pure path
 /// arithmetic: `cwd` is the repo parent (`split_path(root).0`); the deck bundle
 /// lives at `root/decks/<project>`, staged first under the reserved dot-dir
@@ -84,6 +95,7 @@ fn plan_generate(root : String, project : String) -> GenPlan {
     prompt_contract: join_path(root, "templates/deck-prompt.md"),
     furigana_tool: join_path(root, "tools/furigana_check.py"),
     stage_dir: join_path(root, "decks/.partial/\{project}"),
+    backup_dir: join_path(root, "decks/.previous/\{project}"),
     deck_dir: join_path(root, "decks/\{project}"),
   }
 }
@@ -103,13 +115,6 @@ fn join_path(base : String, child : String) -> String {
   } else {
     "\{b}/\{child}"
   }
-}
-
-///|
-/// Whether a repo-relative path belongs to the generated-deck tree. The segment
-/// boundary matters: decks-old/... remains an ordinary tracked source path.
-fn is_deck_path(path : String) -> Bool {
-  path == "decks" || path.has_prefix("decks/")
 }
 
 ///|
@@ -156,44 +161,33 @@ fn parse_git_status(raw : String) -> Array[GitStatusEntry] {
 }
 
 ///|
-/// Keep only status entries touching a tracked path outside decks/. A rename
-/// crossing the boundary remains visible because either endpoint is enough.
-fn outside_deck_status(raw : String) -> Array[GitStatusEntry] {
-  parse_git_status(raw).filter(fn(entry) {
-    entry.paths.any(fn(path) { !is_deck_path(path) })
-  })
-}
-
-///|
 /// Whether an exact porcelain entry key occurs in entries.
 fn has_status_entry(entries : Array[GitStatusEntry], key : String) -> Bool {
   entries.any(fn(entry) { entry.key == key })
 }
 
 ///|
-/// Return the codepoint-sorted outside-deck paths whose tracked status changed
-/// relative to the pre-run snapshot. Symmetric comparison also catches a run
-/// that erases a pre-existing dirty state. An edit that leaves an already-dirty
-/// path's porcelain key unchanged remains an explicit best-effort residual.
+/// Return every codepoint-sorted tracked path whose status changed relative to
+/// the pre-run snapshot. Stages are ignored/untracked and promotion occurs only
+/// after the final comparison, so no tracked path — including another published
+/// deck — is an expected producer/postprocessor write. Symmetric comparison also
+/// catches erasure of a pre-existing dirty state. An edit that leaves an
+/// already-dirty path's porcelain key unchanged remains a best-effort residual.
 fn changed_tracked_paths(before : String, after : String) -> Array[String] {
-  let old = outside_deck_status(before)
-  let new = outside_deck_status(after)
+  let old = parse_git_status(before)
+  let new = parse_git_status(after)
   let changed : @set.Set[String] = @set.Set([])
   for entry in old {
     if !has_status_entry(new, entry.key) {
       for path in entry.paths {
-        if !is_deck_path(path) {
-          changed.add(path)
-        }
+        changed.add(path)
       }
     }
   }
   for entry in new {
     if !has_status_entry(old, entry.key) {
       for path in entry.paths {
-        if !is_deck_path(path) {
-          changed.add(path)
-        }
+        changed.add(path)
       }
     }
   }
@@ -203,17 +197,38 @@ fn changed_tracked_paths(before : String, after : String) -> Array[String] {
 }
 
 ///|
+/// Every tracked path named by either porcelain snapshot, codepoint-sorted.
+/// Used as a conservative offender list when the patch changed but the status
+/// keys did not (an edit to an already-dirty file).
+fn all_status_paths(before : String, after : String) -> Array[String] {
+  let paths : @set.Set[String] = @set.Set([])
+  for raw in [before, after] {
+    for entry in parse_git_status(raw) {
+      for path in entry.paths {
+        paths.add(path)
+      }
+    }
+  }
+  let out = paths.to_array()
+  out.sort_by(lex_compare)
+  out
+}
+
+///|
 /// Best-effort snapshot of tracked working-tree/index state. Porcelain-v1 plus
 /// -z yields stable status columns and literal NUL-delimited paths; untracked
 /// writes are intentionally outside this narrow tripwire. A missing/broken git
 /// command yields None rather than pretending to provide confinement.
-async fn tracked_git_status(root : String) -> String? {
+async fn tracked_git_snapshot(root : String) -> GitSnapshot? {
   try {
-    let (code, stdout, _) = @process.collect_output("git", [
+    let (status_code, status_out, _) = @process.collect_output("git", [
       "-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=no",
     ])
-    if code == 0 {
-      Some(stdout.text())
+    let (diff_code, diff_out, _) = @process.collect_output("git", [
+      "-C", root, "diff", "--binary", "--no-ext-diff", "HEAD", "--",
+    ])
+    if status_code == 0 && diff_code == 0 {
+      Some(GitSnapshot::{ status: status_out.text(), diff: diff_out.text() })
     } else {
       None
     }
@@ -241,19 +256,29 @@ fn render_status_paths(paths : Array[String]) -> String {
 /// Compare the post-producer tracked status with the captured baseline. The
 /// stage plan determines the real slide-gen repo root; failure to capture either
 /// snapshot disables this best-effort signal, while any changed tracked path
-/// outside decks/ blocks publication.
+/// blocks publication.
 async fn check_tracked_confinement(
   plan : GenPlan,
-  baseline : String?,
+  baseline : GitSnapshot?,
 ) -> String? {
   guard baseline is Some(before) else { return None }
   let deck_home = split_path(plan.deck_dir).0
   let repo_root = split_path(deck_home).0
-  guard tracked_git_status(repo_root) is Some(after) else { return None }
-  let changed = changed_tracked_paths(before, after)
-  if changed.length() == 0 {
+  guard tracked_git_snapshot(repo_root) is Some(after) else { return None }
+  if before.status == after.status && before.diff == after.diff {
     None
   } else {
+    let status_changed = changed_tracked_paths(before.status, after.status)
+    let changed = if status_changed.length() > 0 {
+      status_changed
+    } else {
+      let dirty = all_status_paths(before.status, after.status)
+      if dirty.length() > 0 {
+        dirty
+      } else {
+        ["<tracked repository state>"]
+      }
+    }
     Some(render_status_paths(changed))
   }
 }
@@ -276,26 +301,113 @@ async fn remove_entry_no_follow(path : String) -> Unit {
 }
 
 ///|
+/// Ensure `path` is an existing real directory without treating an already
+/// present directory as an error (async fs `mkdir(recursive=true)` still reports
+/// EEXIST for the exact leaf on this toolchain).
+async fn ensure_real_dir(path : String) -> Unit {
+  let kind = try @fs.kind(path, follow_symlink=false) catch {
+    _ => None
+  } noraise {
+    kind => Some(kind)
+  }
+  match kind {
+    Some(@fs.Directory) => ()
+    _ => @fs.mkdir(path, recursive=true)
+  }
+}
+
+///|
+/// Establish the three harness-owned directory roots without following a
+/// symlink at any root. Checking `decks/` first also makes the subsequent
+/// `.partial/` and `.previous/` checks safe from a swapped common parent.
+async fn ensure_reserved_roots(plan : GenPlan) -> Unit {
+  ensure_real_dir(split_path(plan.deck_dir).0)
+  ensure_real_dir(split_path(plan.stage_dir).0)
+  ensure_real_dir(split_path(plan.backup_dir).0)
+}
+
+///|
 /// Recreate the reserved stage as an empty real directory. The no-follow removal
 /// prevents a stale or swapped stage-root symlink from turning recursive cleanup
 /// into deletion of its target.
 async fn recreate_stage(plan : GenPlan) -> Unit {
+  ensure_reserved_roots(plan)
   remove_entry_no_follow(plan.stage_dir)
-  @fs.mkdir(plan.stage_dir, recursive=true)
+  @fs.mkdir(plan.stage_dir)
 }
 
 ///|
-/// Replace any published deck with the validated stage, applying the same
-/// no-follow removal rule to an unexpected destination entry before rename.
+/// Recover an interrupted prior replacement. A real saved deck is restored when
+/// the public path is absent; when both exist, the public path won and the stale
+/// save is discarded. A forged non-directory save is removed without following
+/// it. This makes the two-rename publication protocol restart-safe.
+async fn recover_publication(plan : GenPlan) -> Unit {
+  ensure_reserved_roots(plan)
+  let deck_kind = try @fs.kind(plan.deck_dir, follow_symlink=false) catch {
+    _ => None
+  } noraise {
+    kind => Some(kind)
+  }
+  let backup_kind = try @fs.kind(plan.backup_dir, follow_symlink=false) catch {
+    _ => None
+  } noraise {
+    kind => Some(kind)
+  }
+  match (deck_kind, backup_kind) {
+    (None, Some(@fs.Directory)) => {
+      ensure_real_dir(split_path(plan.deck_dir).0)
+      @fs.rename(plan.backup_dir, plan.deck_dir)
+    }
+    (Some(_), Some(_)) | (None, Some(_)) =>
+      remove_entry_no_follow(plan.backup_dir)
+    _ => ()
+  }
+}
+
+///|
+/// Replace a published deck while preserving the old entry until the validated
+/// stage has landed. The old deck first moves to a collision-free reserved
+/// backup; a failed stage rename restores it before propagating the error. After
+/// success, backup cleanup is best-effort and the next run removes any leftover.
+/// The protocol is rollback-safe and restart-recoverable, though the two rename
+/// operations still leave a small crash interval where the public path is absent.
 async fn promote_stage(plan : GenPlan) -> Unit {
-  remove_entry_no_follow(plan.deck_dir)
-  @fs.rename(plan.stage_dir, plan.deck_dir)
+  ensure_reserved_roots(plan)
+  remove_entry_no_follow(plan.backup_dir)
+  let had_published = try @fs.kind(plan.deck_dir, follow_symlink=false) catch {
+    _ => false
+  } noraise {
+    _ => true
+  }
+  if had_published {
+    ensure_real_dir(split_path(plan.backup_dir).0)
+    @fs.rename(plan.deck_dir, plan.backup_dir)
+  }
+  try @fs.rename(plan.stage_dir, plan.deck_dir) catch {
+    error => {
+      if had_published {
+        try @fs.rename(plan.backup_dir, plan.deck_dir) catch {
+          _ => ()
+        } noraise {
+          _ => ()
+        }
+      }
+      raise error
+    }
+  } noraise {
+    _ => ()
+  }
+  try remove_entry_no_follow(plan.backup_dir) catch {
+    _ => ()
+  } noraise {
+    _ => ()
+  }
 }
 
 ///|
 /// Assert the stage root itself is a real directory rather than a symlink. The
-/// validator follows symlinks by design, so this no-follow check brackets the
-/// sidecar and promotion boundaries where writes/renames would be dangerous.
+/// bundle validator also rejects a symlink root; this explicit bracket produces
+/// the orchestration-level diagnostic before sidecar writes or promotion.
 async fn stage_is_real_directory(path : String) -> Bool {
   try @fs.kind(path, follow_symlink=false) catch {
     _ => false
@@ -321,18 +433,30 @@ async fn stage_validate_promote(
   confine~ : async (GenPlan) -> String?,
   retries? : Int = 1,
 ) -> GenOutcome {
+  let recovery_error : String? = try recover_publication(plan) catch {
+    error => Some("\{error}")
+  } noraise {
+    _ => None
+  }
+  match recovery_error {
+    Some(error) => return ExecFailed("publication recovery failed: \{error}")
+    None => ()
+  }
   let retry_count = if retries < 0 { 0 } else { retries }
   let mut last : GenOutcome = ExecFailed("generation did not run")
   for _ in 0..<(retry_count + 1) {
     recreate_stage(plan)
     let (code, _, stderr) = produce(plan)
+    match confine(plan) {
+      Some(offenders) => return ExecFailed("write escaped bundle: \{offenders}")
+      None => ()
+    }
     if code != 0 {
       last = ExecFailed(stderr)
       continue
     }
-    match confine(plan) {
-      Some(offenders) => return ExecFailed("write escaped bundle: \{offenders}")
-      None => ()
+    if !stage_is_real_directory(plan.stage_dir) {
+      return ExecFailed("stage root is not a directory")
     }
     let initial_report = validate_bundle_dir(
       plan.stage_dir,
@@ -348,13 +472,13 @@ async fn stage_validate_promote(
       return ExecFailed("stage root is not a directory")
     }
     let (post_code, post_stderr) = postprocess(plan)
-    if post_code != 0 {
-      last = ExecFailed(post_stderr)
-      continue
-    }
     match confine(plan) {
       Some(offenders) => return ExecFailed("write escaped bundle: \{offenders}")
       None => ()
+    }
+    if post_code != 0 {
+      last = ExecFailed(post_stderr)
+      continue
     }
     let final_report = validate_bundle_dir(
       plan.stage_dir,
@@ -539,12 +663,14 @@ async fn run_codex(plan : GenPlan) -> (Int, String, String) {
 
 ///|
 /// Generate one project against an already captured tracked-status baseline.
-/// Batch generation shares one pre-batch snapshot so an escaped write from an
-/// earlier project cannot become a later project's accepted baseline.
+/// Each project receives a baseline captured immediately before its own stage
+/// recreation. Every producer/postprocessor attempt is confined even on a
+/// nonzero exit, so refreshing after a completed project safely incorporates
+/// the prior project's legitimate post-confinement promotion.
 async fn generate_project_from_baseline(
   root : String,
   project : String,
-  baseline : String?,
+  baseline : GitSnapshot?,
 ) -> GenOutcome {
   let plan = plan_generate(root, project)
   async fn confine(p : GenPlan) -> String? {
@@ -560,11 +686,23 @@ async fn generate_project_from_baseline(
 }
 
 ///|
-/// Generate one named project with the production Codex producer and a baseline
-/// captured before stage recreation or execution. Staged/published changes under
-/// decks/ are intentionally excluded from the tracked-status comparison.
+/// Generate one named project with the production Codex producer. Recover an
+/// interrupted prior publication before capturing the tracked baseline, so the
+/// legitimate restoration is part of the accepted starting state rather than a
+/// false escaped-write finding. The ignored stage is absent from the comparison;
+/// every tracked path remains protected until promotion.
 pub async fn generate_project(root : String, project : String) -> GenOutcome {
-  generate_project_from_baseline(root, project, tracked_git_status(root))
+  let plan = plan_generate(root, project)
+  let recovery_error : String? = try recover_publication(plan) catch {
+    error => Some("\{error}")
+  } noraise {
+    _ => None
+  }
+  match recovery_error {
+    Some(error) => return ExecFailed("publication recovery failed: \{error}")
+    None => ()
+  }
+  generate_project_from_baseline(root, project, tracked_git_snapshot(root))
 }
 
 ///|
@@ -783,12 +921,11 @@ pub async fn generate_enabled(
   state_path : String,
   dry_run? : Bool = false,
 ) -> (String, Int) {
-  let baseline = if dry_run { None } else { tracked_git_status(root) }
   async fn run(project : String) -> (String, Int) {
     if dry_run {
       (render_dry_run(root, project), 0)
     } else {
-      render_outcome(generate_project_from_baseline(root, project, baseline))
+      render_outcome(generate_project(root, project))
     }
   }
 

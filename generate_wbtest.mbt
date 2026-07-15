@@ -101,6 +101,7 @@ test "generation plan and dry-run paths stay canonical" {
   assert_eq(at_root.prompt_contract, "/slide-gen/templates/deck-prompt.md")
   assert_eq(at_root.furigana_tool, "/slide-gen/tools/furigana_check.py")
   assert_eq(at_root.stage_dir, "/slide-gen/decks/.partial/projA")
+  assert_eq(at_root.backup_dir, "/slide-gen/decks/.previous/projA")
   let trailing = plan_generate("/w/Projects/slide-gen/", "projA")
   assert_eq(trailing.template, "/w/Projects/slide-gen/templates/deck.html")
   assert_eq(
@@ -108,6 +109,7 @@ test "generation plan and dry-run paths stay canonical" {
     "/w/Projects/slide-gen/templates/deck-prompt.md",
   )
   assert_eq(trailing.stage_dir, "/w/Projects/slide-gen/decks/.partial/projA")
+  assert_eq(trailing.backup_dir, "/w/Projects/slide-gen/decks/.previous/projA")
   let spaced = plan_generate("/w/My Projects/slide-gen", "projA")
   let shown = render_dry_run_text(spaced, "prompt\n", 900)
   assert_true(shown.contains("-C '/w/My Projects'\n"))
@@ -197,6 +199,7 @@ fn gen_stub_plan(root : String, project? : String = "project") -> GenPlan {
     prompt_contract: "\{root}/deck-prompt.md",
     furigana_tool: "\{root}/tools/furigana_check.py",
     stage_dir: "\{root}/decks/.partial/\{project}",
+    backup_dir: "\{root}/decks/.previous/\{project}",
     deck_dir: "\{root}/decks/\{project}",
   }
 }
@@ -278,6 +281,39 @@ async test "stage_validate_promote safely rebuilds and promotes a passing bundle
 }
 
 ///|
+/// Publication replacement preserves the old deck until the staged rename
+/// succeeds: a missing stage forces promotion to fail and restores the prior
+/// deck. A saved real deck left by an interrupted two-rename sequence is also
+/// restored on the next recovery pass.
+async test "publication rollback and restart recovery preserve the old deck" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-publish-recovery")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = gen_stub_plan(root)
+    @fs.mkdir(plan.deck_dir, recursive=true)
+    @fs.write_file(
+      "\{plan.deck_dir}/sentinel",
+      "old",
+      create_mode=CreateOrTruncate,
+    )
+    let mut failed = false
+    try promote_stage(plan) catch {
+      _ => failed = true
+    } noraise {
+      _ => ()
+    }
+    assert_true(failed)
+    assert_eq(@fs.read_file("\{plan.deck_dir}/sentinel").text(), "old")
+    assert_false(@fs.exists(plan.backup_dir))
+    @fs.rename(plan.deck_dir, plan.backup_dir)
+    assert_false(@fs.exists(plan.deck_dir))
+    recover_publication(plan)
+    assert_eq(@fs.read_file("\{plan.deck_dir}/sentinel").text(), "old")
+    assert_false(@fs.exists(plan.backup_dir))
+  }
+}
+
+///|
 /// A producer that exits successfully without writing deck.html is validated as
 /// a retained `deck.missing` failure, retried once, and left staged for inspection.
 async test "stage_validate_promote retains an invalid bundle after one retry" {
@@ -324,22 +360,30 @@ async test "stage_validate_promote reports producer failure" {
     let root = @fs.tmpdir(prefix="slide-gen-stage-exec")
     group.add_defer(() => @fs.rmdir(root, recursive=true))
     let plan = gen_stub_plan(root)
+    let mut confine_calls = 0
     async fn produce(p : GenPlan) -> (Int, String, String) {
       ignore(@fs.exists(p.stage_dir))
       (7, "", "codex failed")
+    }
+
+    async fn confine(p : GenPlan) -> String? {
+      confine_calls = confine_calls + 1
+      ignore(@fs.exists(p.stage_dir))
+      None
     }
 
     let outcome = stage_validate_promote(
       plan,
       produce~,
       postprocess=pass_gen_postprocess,
-      confine=allow_gen_stage,
+      confine~,
       retries=0,
     )
     guard outcome is ExecFailed(message) else {
       abort("nonzero producer was not reported")
     }
     assert_eq(message, "codex failed")
+    assert_eq(confine_calls, 1)
     assert_true(@fs.exists(plan.stage_dir))
     assert_false(@fs.exists(plan.deck_dir))
   }
@@ -518,8 +562,8 @@ async test "stage_validate_promote preserves warnings on promotion" {
 
 ///|
 /// A producer cannot swap the stage root for a symlink and publish its target:
-/// validation may read the target under the current residual policy, but the
-/// pre-promotion no-follow kind assertion blocks the rename.
+/// both bundle validation and the orchestration-level no-follow assertion reject
+/// it before postprocessing or promotion.
 async test "stage_validate_promote rejects a swapped stage-root symlink" {
   @async.with_task_group() <| group => {
     let root = @fs.tmpdir(prefix="slide-gen-stage-swap")
@@ -550,33 +594,75 @@ async test "stage_validate_promote rejects a swapped stage-root symlink" {
 }
 
 ///|
-/// The confinement tripwire compares tracked-status entries outside `decks/`
-/// against its pre-run baseline. An unchanged dirty file is tolerated, while a
-/// new change, a disappeared baseline change, or a status transition is named;
-/// generated-deck changes and untracked records are outside this best-effort
-/// signal.
-test "changed_tracked_paths diffs outside-deck status against baseline" {
+/// A symlink at the reserved stage parent is rejected before recursive cleanup;
+/// neither its outside target nor a sentinel below that target is traversed.
+async test "stage_validate_promote rejects a symlinked reserved parent" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-stage-parent-swap")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = gen_stub_plan(root)
+    let outside = "\{root}/outside"
+    @fs.mkdir(outside)
+    @fs.mkdir("\{outside}/\{plan.project}")
+    @fs.write_file(
+      "\{outside}/\{plan.project}/sentinel",
+      "keep",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.mkdir(split_path(plan.deck_dir).0, recursive=true)
+    @fs.symlink(split_path(plan.stage_dir).0, target=outside)
+    async fn produce(p : GenPlan) -> (Int, String, String) {
+      write_gen_stub(p)
+      (0, "", "")
+    }
+
+    let outcome = stage_validate_promote(
+      plan,
+      produce~,
+      postprocess=pass_gen_postprocess,
+      confine=allow_gen_stage,
+    )
+    guard outcome is ExecFailed(message) else {
+      abort("symlinked reserved parent was not blocked")
+    }
+    assert_true(message.has_prefix("publication recovery failed:"))
+    assert_eq(
+      @fs.read_file("\{outside}/\{plan.project}/sentinel").text(),
+      "keep",
+    )
+  }
+}
+
+///|
+/// The confinement tripwire compares every tracked-status entry against its
+/// pre-run baseline. An unchanged dirty file is tolerated, while a new change,
+/// a disappeared baseline change, or a status transition — including a direct
+/// published-deck mutation — is named; untracked stage records remain outside
+/// this best-effort signal.
+test "changed_tracked_paths diffs all tracked status against baseline" {
   let before = " M unchanged.txt\u{0} M removed.txt\u{0} M transition.txt\u{0} M decks/proj/deck.html\u{0}"
   let after = " M unchanged.txt\u{0} M added name.txt\u{0}M  transition.txt\u{0} D decks/proj/deck.html\u{0}?? untracked.txt\u{0}"
   json_inspect(changed_tracked_paths(before, after), content=[
-    "added name.txt", "removed.txt", "transition.txt",
+    "added name.txt", "decks/proj/deck.html", "removed.txt", "transition.txt",
   ])
 }
 
 ///|
 /// Porcelain-v1 `-z` emits a rename/copy's destination and source as adjacent
-/// NUL records. Both paths belong to one status entry: an all-decks rename is
-/// allowed, while a rename crossing the boundary reports only its outside path.
+/// NUL records. Both paths belong to one status entry and every tracked endpoint
+/// is reported, including deck-to-deck and cross-tree renames.
 test "changed_tracked_paths parses nul rename records without path quoting" {
   let after = "R  decks/proj/new.html\u{0}source old.html\u{0}R  decks/proj/newer.html\u{0}decks/proj/older.html\u{0}"
-  json_inspect(changed_tracked_paths("", after), content=["source old.html"])
+  json_inspect(changed_tracked_paths("", after), content=[
+    "decks/proj/new.html", "decks/proj/newer.html", "decks/proj/older.html", "source old.html",
+  ])
 }
 
 ///|
-/// Exercise the real porcelain command over a temporary Git repo: the clean
-/// baseline is empty, a tracked source edit appears, a tracked deck edit is
-/// filtered by the boundary rule, and an untracked write is omitted at capture.
-async test "tracked_git_status captures only relevant tracked changes" {
+/// Exercise the real Git snapshot over a temporary repo: tracked source and deck
+/// edits appear, an untracked write is omitted, and a second edit to an already
+/// dirty source changes the patch fingerprint even though porcelain stays equal.
+async test "tracked_git_snapshot catches ordinary and already-dirty edits" {
   @async.with_task_group() <| group => {
     let root = @fs.tmpdir(prefix="slide-gen-git-status")
     group.add_defer(() => @fs.rmdir(root, recursive=true))
@@ -613,10 +699,11 @@ async test "tracked_git_status captures only relevant tracked changes" {
       cwd=root,
     )
     assert_eq(commit_code, 0)
-    guard tracked_git_status(root) is Some(before) else {
+    guard tracked_git_snapshot(root) is Some(before) else {
       abort("clean git baseline capture failed")
     }
-    assert_eq(before, "")
+    assert_eq(before.status, "")
+    assert_eq(before.diff, "")
     @fs.write_file(
       "\{root}/source.txt",
       "after\n",
@@ -632,10 +719,35 @@ async test "tracked_git_status captures only relevant tracked changes" {
       "ignored\n",
       create_mode=CreateOrTruncate,
     )
-    guard tracked_git_status(root) is Some(after) else {
+    guard tracked_git_snapshot(root) is Some(after) else {
       abort("dirty git status capture failed")
     }
-    json_inspect(changed_tracked_paths(before, after), content=["source.txt"])
+    json_inspect(changed_tracked_paths(before.status, after.status), content=[
+      "decks/proj/deck.html", "source.txt",
+    ])
+    @fs.write_file(
+      "\{root}/decks/proj/deck.html",
+      "before\n",
+      create_mode=CreateOrTruncate,
+    )
+    guard tracked_git_snapshot(root) is Some(dirty_before) else {
+      abort("dirty baseline capture failed")
+    }
+    @fs.write_file(
+      "\{root}/source.txt",
+      "after again\n",
+      create_mode=CreateOrTruncate,
+    )
+    guard tracked_git_snapshot(root) is Some(dirty_after) else {
+      abort("second dirty capture failed")
+    }
+    assert_eq(dirty_before.status, dirty_after.status)
+    assert_false(dirty_before.diff == dirty_after.diff)
+    let plan = gen_stub_plan(root)
+    inspect(
+      check_tracked_confinement(plan, Some(dirty_before)).unwrap_or("<none>"),
+      content="source.txt",
+    )
   }
 }
 

@@ -36,40 +36,39 @@ test "has_class whole-token match" {
 }
 
 ///|
-/// `strip_comments` drops a well-formed comment; an unterminated comment swallows
-/// the rest of the document.
-test "strip_comments removes comments and swallows unterminated" {
-  let a = strip_comments("a<!--b-->c".to_array())
+/// `clean_doc` drops comments, blanks raw-text bodies, and treats each ordinary
+/// tag as one quote-aware unit. Comment/raw-text-shaped attribute values remain
+/// inert instead of hiding the real markup after their host tag.
+test "clean_doc handles comments raw text and quoted decoys in one pass" {
+  let a = clean_doc("a<!--b-->c".to_array())
   inspect(range_to_string(a, 0, a.length()), content="ac")
-  let b = strip_comments("keep<!--x".to_array())
+  let b = clean_doc("keep<!--x".to_array())
   inspect(range_to_string(b, 0, b.length()), content="keep")
-  let c = strip_comments("<!--only-->".to_array())
+  let c = clean_doc("<!--only-->".to_array())
   inspect(range_to_string(c, 0, c.length()), content="")
-}
-
-///|
-/// `strip_raw_text` blanks `<style>`/`<script>` content but keeps their tags; a
-/// close tag matches only at a name boundary (`</stylex>` does not close); and an
-/// unterminated raw-text element is blanked to end of document.
-test "strip_raw_text blanks raw-text content" {
-  let a = strip_raw_text("<style><img src=x></style>keep".to_array())
-  inspect(range_to_string(a, 0, a.length()), content="<style></style>keep")
-  let b = strip_raw_text("x<script>a<b</script>y".to_array())
-  inspect(range_to_string(b, 0, b.length()), content="x<script></script>y")
+  let style = clean_doc("<style><img src=x></style>keep".to_array())
+  inspect(
+    range_to_string(style, 0, style.length()),
+    content="<style></style>keep",
+  )
+  let script = clean_doc("x<script>a<b</script>y".to_array())
+  inspect(
+    range_to_string(script, 0, script.length()),
+    content="x<script></script>y",
+  )
   // </stylex> is not a name-boundary close, so blanking continues to the real one.
-  let d = strip_raw_text("<style>x</stylex>y</style>z".to_array())
+  let d = clean_doc("<style>x</stylex>y</style>z".to_array())
   inspect(range_to_string(d, 0, d.length()), content="<style></style>z")
   // Unterminated raw-text runs to end of document, so its remainder is blanked.
-  let c = strip_raw_text("<style>body{}".to_array())
-  inspect(range_to_string(c, 0, c.length()), content="<style>")
-}
-
-///|
-/// `index_ci` finds a needle case-insensitively and returns `-1` when absent.
-test "index_ci case-insensitive and absent" {
-  assert_eq(index_ci("Hello".to_array(), "ell".to_array()), 1)
-  assert_eq(index_ci("HELLO".to_array(), "ell".to_array()), 1)
-  assert_eq(index_ci("abc".to_array(), "xyz".to_array()), -1)
+  let unclosed = clean_doc("<style>body{}".to_array())
+  inspect(range_to_string(unclosed, 0, unclosed.length()), content="<style>")
+  let quoted = clean_doc(
+    "<div data-a='<!--' data-b=\"<style>\"></div><span>kept</span>".to_array(),
+  )
+  inspect(
+    range_to_string(quoted, 0, quoted.length()),
+    content="<div data-a='<!--' data-b=\"<style>\"></div><span>kept</span>",
+  )
 }
 
 ///|
@@ -93,6 +92,17 @@ test "find_by_class reports siblings, not nested duplicates" {
   assert_eq(elems.length(), 2)
   // The second match is the sibling, not the nested inner .x.
   inspect(range_to_string(doc, elems[1].lo, elems[1].hi), content="sib")
+}
+
+///|
+/// Numeric HTML tag names are scanned and depth-matched in full: an `h2` class
+/// match ends at `</h2>` and cannot consume a later sibling match.
+test "find_by_class preserves numeric tag names" {
+  let doc = "<h2 class=\"x\">head</h2><div class=\"x\">tail</div>".to_array()
+  let elems = find_by_class(doc, 0, doc.length(), ["x"])
+  assert_eq(elems.length(), 2)
+  inspect(range_to_string(doc, elems[0].lo, elems[0].hi), content="head")
+  inspect(range_to_string(doc, elems[1].lo, elems[1].hi), content="tail")
 }
 
 ///|
@@ -241,6 +251,9 @@ test "check_jpf_ruby per-kanji coverage and code exemption" {
   let bare = Report::{ findings: [] }
   check_jpf_ruby("要点", bare)
   json_inspect(bare.codes(), content=["ruby.kanji_uncovered"])
+  let encoded = Report::{ findings: [] }
+  check_jpf_ruby("&#x8981;", encoded)
+  json_inspect(encoded.codes(), content=["ruby.kanji_uncovered"])
 }
 
 ///|
@@ -267,16 +280,18 @@ test "scan_deck fills entry tiers" {
 }
 
 ///|
-/// `classify_tag` blanks a tag name that a name-continuation char cuts short, so
-/// `<rt2>` and `<ruby-foo>` cannot masquerade as `<rt>`/`<ruby>`, while a real
-/// `<rt>` (letters then a boundary) still classifies.
-test "classify_tag blanks a non-boundary tag name" {
+/// `classify_tag` retains a complete numeric/custom tag name, so `<rt2>` and
+/// `<ruby-foo>` remain distinct from `<rt>`/`<ruby>`.
+test "classify_tag preserves complete tag names" {
   let rt2 = "<rt2>".to_array()
   let (name_rt2, _, _) = classify_tag(rt2, 0, rt2.length())
-  inspect(name_rt2, content="")
+  inspect(name_rt2, content="rt2")
   let ruby_foo = "<ruby-foo>".to_array()
   let (name_rf, _, _) = classify_tag(ruby_foo, 0, ruby_foo.length())
-  inspect(name_rf, content="")
+  inspect(name_rf, content="ruby-foo")
+  let rt_foo = "<rt_foo>".to_array()
+  let (name_rt_foo, _, _) = classify_tag(rt_foo, 0, rt_foo.length())
+  inspect(name_rt_foo, content="rt_foo")
   let real = "<rt>".to_array()
   let (name_rt, is_close, _) = classify_tag(real, 0, real.length())
   inspect(name_rt, content="rt")
@@ -307,6 +322,16 @@ test "check_jpf_ruby flags an unclosed rt inside a closed ruby" {
 test "check_jpf_ruby flags a stray rt outside ruby" {
   let r = Report::{ findings: [] }
   check_jpf_ruby("<rt>よう</rt>", r)
+  json_inspect(r.codes(), content=["ruby.rt_count"])
+}
+
+///|
+/// A closing `</rt>` without a matching opener is malformed even when all text
+/// before it happens to be kana; it cannot pass by borrowing that prefix as a
+/// synthetic reading.
+test "check_jpf_ruby flags a stray closing rt" {
+  let r = Report::{ findings: [] }
+  check_jpf_ruby("かな</rt>", r)
   json_inspect(r.codes(), content=["ruby.rt_count"])
 }
 

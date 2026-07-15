@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import html
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-
+from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "assets" / "data-quality-findings.png"
@@ -67,7 +66,8 @@ def _svg() -> str:
 *{{box-sizing:border-box}}html,body{{margin:0;width:{WIDTH}px;height:{HEIGHT}px;overflow:hidden;background:#fff}}
 body{{font-family:'Noto Sans','Noto Sans CJK JP',sans-serif}}
 </style></head><body>
-<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}">
+<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}"
+     viewBox="0 0 {WIDTH} {HEIGHT}">
   <rect width="{WIDTH}" height="{HEIGHT}" fill="#ffffff"/>
   <text x="64" y="76" class="title">ルール検出の集計</text>
   <text x="64" y="117" class="subtitle">AGGREGATE RULE FINDINGS</text>
@@ -76,9 +76,10 @@ body{{font-family:'Noto Sans','Noto Sans CJK JP',sans-serif}}
   <text x="238" y="205" class="total">{TOTAL:,}</text>
   <text x="556" y="205" class="meta">対象エピソード / EPISODES FLAGGED</text>
   <text x="996" y="205" text-anchor="end" class="total-small">{EPISODES_FLAGGED:,}</text>
-  {''.join(ticks)}
-  {''.join(rows)}
-  <text x="996" y="696" text-anchor="end" class="source">tracked aggregate summary · counts of rule findings</text>
+  {"".join(ticks)}
+  {"".join(rows)}
+  <text x="996" y="696" text-anchor="end" class="source"
+  >tracked aggregate summary · counts of rule findings</text>
   <style>
     .title{{font-size:38px;font-weight:800;fill:#1a1a1a}}
     .subtitle{{font-size:17px;font-weight:700;letter-spacing:4px;fill:#8c8c8c}}
@@ -103,8 +104,12 @@ def main() -> None:
     temp_png: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".html", prefix="rehab-figure-", dir="/tmp", delete=False,
-            encoding="utf-8"
+            mode="w",
+            suffix=".html",
+            prefix="rehab-figure-",
+            dir="/tmp",
+            delete=False,
+            encoding="utf-8",
         ) as handle:
             handle.write(_svg())
             temp_html = Path(handle.name)

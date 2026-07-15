@@ -53,7 +53,7 @@ fn slice_str(content : String, a : Int, b : Int) -> String {
 /// Run `check_gaps` over `text` and return the resulting codes.
 fn gaps_codes(text : String) -> Array[String] {
   let out = Report::{ findings: [] }
-  check_gaps(text, out)
+  ignore(check_gaps(text, out))
   out.codes()
 }
 
@@ -98,16 +98,45 @@ test "parse_row schema outcomes" {
     row_result(pj("{\"slide\":1,\"claim\":\"x\",\"status\":\"gap\"}")),
     content="provenance row is missing a string id",
   )
+  inspect(
+    row_result(
+      pj("{\"id\":\"\",\"slide\":1,\"claim\":\"x\",\"status\":\"gap\"}"),
+    ),
+    content="provenance row has an empty id",
+  )
+  inspect(
+    row_result(
+      pj("{\"id\":\"c1\",\"slide\":1.5,\"claim\":\"x\",\"status\":\"gap\"}"),
+    ),
+    content="provenance row slide is not a positive integer",
+  )
+  inspect(
+    row_result(
+      pj("{\"id\":\"c1\",\"slide\":1,\"claim\":\"\",\"status\":\"gap\"}"),
+    ),
+    content="provenance row has an empty claim",
+  )
+  inspect(
+    row_result(
+      pj(
+        "{\"id\":\"c1\",\"slide\":1,\"claim\":\"x\",\"status\":\"gap\",\"src\":\"a.md:1-1\"}",
+      ),
+    ),
+    content="gap provenance row must omit src and quote",
+  )
 }
 
 ///|
-/// `check_gaps` treats the `no gaps` sentinel (case-insensitively) or any bullet
-/// line as disclosure, and flags prose that discloses neither.
+/// `check_gaps` accepts either the exact `no gaps` sentinel or a bullet list,
+/// rejects case drift/prose as empty, and rejects a sentinel mixed with content.
 test "check_gaps disclosure" {
   json_inspect(gaps_codes("no gaps\n"), content=[])
   json_inspect(gaps_codes("Open gaps:\n- \u{7528}\u{8a9e}: reason\n"), content=[])
-  json_inspect(gaps_codes("No Gaps\n"), content=[])
+  json_inspect(gaps_codes("No Gaps\n"), content=["gaps.empty"])
   json_inspect(gaps_codes("This deck is complete.\n"), content=["gaps.empty"])
+  json_inspect(gaps_codes("no gaps\n- unresolved\n"), content=[
+    "gaps.contradiction",
+  ])
 }
 
 ///|
@@ -252,9 +281,14 @@ fn crossref_codes(
   assets : Array[String],
   row_ids : Array[String],
 ) -> Array[String] {
-  let doc = strip_raw_text(strip_comments(html.to_array()))
+  let doc = clean_doc(html.to_array())
   let out = Report::{ findings: [] }
-  check_deck_crossref(doc, @set.Set(assets[:]), @set.Set(row_ids[:]), out)
+  check_deck_crossref(
+    doc,
+    @set.Set(assets[:]),
+    ProvIndex::{ rows: [], ids: @set.Set(row_ids[:]), has_gap: false },
+    out,
+  )
   out.codes()
 }
 

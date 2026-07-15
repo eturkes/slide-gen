@@ -21,3 +21,4 @@ target/
 enabled.txt
 enabled.txt.tmp
 decks/.partial/
+decks/.previous/

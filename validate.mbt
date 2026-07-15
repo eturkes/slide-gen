@@ -113,6 +113,15 @@ fn is_ascii_digit(c : Char) -> Bool {
 }
 
 ///|
+/// HTML tag-name continuation in the tokenizer's tag-name state. Tags still
+/// begin with an ASCII letter, then every codepoint up to structural whitespace,
+/// `/`, or `>` belongs to the name. Thus no punctuation can be misread as a
+/// boundary that turns a look-alike (`rt_foo`) into a real `rt` tag.
+fn is_tag_name_char(c : Char) -> Bool {
+  !is_space(c) && c != '/' && c != '>' && c != '\u{0}'
+}
+
+///|
 /// Whether `c` may appear in an HTML attribute name (letters, digits, and the
 /// `- _ : .` punctuation that covers `charset`, `lang`, `class`, `src`, and
 /// data attributes).
@@ -160,20 +169,6 @@ fn ci_matches_at(doc : Array[Char], i : Int, needle : Array[Char]) -> Bool {
 }
 
 ///|
-/// First index at which `needle` (ASCII-lowercase) occurs in `doc` under ASCII
-/// case-folding, or `-1` if absent. An empty needle matches at `0`.
-fn index_ci(doc : Array[Char], needle : Array[Char]) -> Int {
-  let n = doc.length()
-  let m = needle.length()
-  for i in 0..<(n - m + 1) {
-    if ci_matches_at(doc, i, needle) {
-      return i
-    }
-  }
-  -1
-}
-
-///|
 /// ASCII case-insensitive string equality — for comparing attribute values
 /// (`lang`, `charset`) whose canonical forms are ASCII.
 fn ci_eq(a : String, b : String) -> Bool {
@@ -191,31 +186,51 @@ fn ci_eq(a : String, b : String) -> Bool {
 }
 
 ///|
-/// Remove every HTML comment `<!--...-->` from `doc`, returning a new char array.
-/// Comments are stripped once, up front, so all later scans operate on markup
-/// only: the template embeds `<section class="slide">` and `<img src="assets/…">`
-/// literals inside its head comment, and those must not be mistaken for real
-/// elements. An unterminated comment swallows the rest of the document (matching
-/// browser behavior).
-fn strip_comments(doc : Array[Char]) -> Array[Char] {
-  let out : Array[Char] = []
-  let n = doc.length()
-  let open = ['<', '!', '-', '-']
-  let close = ['-', '-', '>']
-  let mut i = 0
-  while i < n {
-    if ci_matches_at(doc, i, open) {
-      let mut j = i + 4
-      while j < n && !ci_matches_at(doc, j, close) {
-        j = j + 1
-      }
-      i = if j < n { j + 3 } else { n }
-    } else {
-      out.push(doc[i])
-      i = i + 1
-    }
+/// Whether `<` at `i` begins an ordinary open tag. HTML tag names begin with an
+/// ASCII letter; requiring that letter keeps a stray text `<` (`5 < 6`) out of
+/// the markup path instead of letting it swallow the next real tag.
+fn is_open_tag_start(doc : Array[Char], i : Int, end : Int) -> Bool {
+  i >= 0 && i + 1 < end && doc[i] == '<' && is_ascii_letter(doc[i + 1])
+}
+
+///|
+/// Whether `<` at `i` begins an ordinary close tag.
+fn is_close_tag_start(doc : Array[Char], i : Int, end : Int) -> Bool {
+  i >= 0 &&
+  i + 2 < end &&
+  doc[i] == '<' &&
+  doc[i + 1] == '/' &&
+  is_ascii_letter(doc[i + 2])
+}
+
+///|
+/// Whether `<` at `i` begins markup that must be stepped over atomically. Open
+/// and close tags plus declarations/processing instructions qualify; a stray
+/// text `<` does not. Stepping a complete tag via `skip_tag` is what prevents a
+/// comment/raw-text-shaped substring inside a quoted attribute from changing
+/// parser context.
+fn is_markup_start(doc : Array[Char], i : Int, end : Int) -> Bool {
+  is_open_tag_start(doc, i, end) ||
+  is_close_tag_start(doc, i, end) ||
+  (
+    i >= 0 &&
+    i + 1 < end &&
+    doc[i] == '<' &&
+    (doc[i + 1] == '!' || doc[i + 1] == '?')
+  )
+}
+
+///|
+/// Append `doc[lo:hi]` verbatim to `out`.
+fn append_range(
+  out : Array[Char],
+  doc : Array[Char],
+  lo : Int,
+  hi : Int,
+) -> Unit {
+  for i in lo..<hi {
+    out.push(doc[i])
   }
-  out
 }
 
 ///|
@@ -241,35 +256,49 @@ fn raw_text_open(doc : Array[Char], i : Int) -> String? {
 }
 
 ///|
-/// Blank the content of `<style>` and `<script>` raw-text elements, keeping their
-/// open and close tags. Browsers do not parse markup inside these elements, so a
-/// `<img src=…>` or `<section class="slide">` written in CSS (as the template's
-/// placeholder note is) must not be scanned as a real element. Run after
-/// `strip_comments`. The close tag matches only at a name boundary, so
-/// `</stylex>` does not close a `<style>`. An unterminated raw-text element runs
-/// to end of document (browsers keep consuming raw text), so its remainder is
-/// blanked too — an unclosed `<style>` then cascades to `frame.style` plus
-/// `frame.body`/`frame.no_slides`, which matches its blank render.
-fn strip_raw_text(doc : Array[Char]) -> Array[Char] {
+/// Clean the document in one context-aware pass: remove HTML comments and blank
+/// `<style>`/`<script>` raw text while retaining their tags. Ordinary tags are
+/// copied atomically via the quote-aware `skip_tag`, so `<!--` or `<style>`
+/// inside an attribute value cannot switch cleaning context and hide later
+/// markup. Raw-text end tags follow browser tokenization, comments swallow to
+/// their terminator (or EOF), and an unterminated raw-text element blanks to EOF.
+fn clean_doc(doc : Array[Char]) -> Array[Char] {
   let out : Array[Char] = []
   let n = doc.length()
+  let comment_open = ['<', '!', '-', '-']
+  let comment_close = ['-', '-', '>']
   let mut i = 0
   while i < n {
-    if doc[i] == '<' {
+    if ci_matches_at(doc, i, comment_open) {
+      let mut close = i + comment_open.length()
+      while close < n && !ci_matches_at(doc, close, comment_close) {
+        close = close + 1
+      }
+      i = if close < n { close + comment_close.length() } else { n }
+    } else if is_open_tag_start(doc, i, n) {
       match raw_text_open(doc, i) {
         Some(tag) => {
           let past_gt = skip_tag(doc, i, n)
-          for k in i..<past_gt {
-            out.push(doc[k])
+          append_range(out, doc, i, past_gt)
+          let close = find_raw_close_tag(doc, tag, past_gt)
+          if close >= 0 {
+            let close_past = skip_tag(doc, close, n)
+            append_range(out, doc, close, close_past)
+            i = close_past
+          } else {
+            i = n
           }
-          let close = find_close_tag(doc, tag, past_gt)
-          i = if close >= 0 { close } else { n }
         }
         None => {
-          out.push(doc[i])
-          i = i + 1
+          let past_gt = skip_tag(doc, i, n)
+          append_range(out, doc, i, past_gt)
+          i = past_gt
         }
       }
+    } else if is_markup_start(doc, i, n) {
+      let past_gt = skip_tag(doc, i, n)
+      append_range(out, doc, i, past_gt)
+      i = past_gt
     } else {
       out.push(doc[i])
       i = i + 1
@@ -314,7 +343,7 @@ fn scan_open_tag(doc : Array[Char], lt : Int) -> (String, Int, Int, Int) {
   let n = doc.length()
   let name_start = lt + 1
   let mut i = name_start
-  while i < n && is_ascii_letter(doc[i]) {
+  while i < n && is_tag_name_char(doc[i]) {
     i = i + 1
   }
   let sb = StringBuilder::new()
@@ -450,8 +479,8 @@ fn find_all_open_tags(doc : Array[Char], name : String) -> Array[Int] {
   let m = needle.length()
   let mut i = 0
   while i < n {
-    if doc[i] == '<' {
-      if i + 1 < n && doc[i + 1] != '/' && ci_matches_at(doc, i + 1, needle) {
+    if is_open_tag_start(doc, i, n) {
+      if ci_matches_at(doc, i + 1, needle) {
         let after = i + 1 + m
         if after >= n ||
           is_space(doc[after]) ||
@@ -461,6 +490,8 @@ fn find_all_open_tags(doc : Array[Char], name : String) -> Array[Int] {
         }
       }
       i = skip_tag(doc, i, n)
+    } else if is_markup_start(doc, i, n) {
+      i = skip_tag(doc, i, n)
     } else {
       i = i + 1
     }
@@ -469,11 +500,10 @@ fn find_all_open_tags(doc : Array[Char], name : String) -> Array[Int] {
 }
 
 ///|
-/// Index of the first `</name>` close tag at or after `from` (matched
-/// case-insensitively), requiring a name boundary (whitespace, `>`, `/`, or end)
-/// after `name` so `</style>` matches but `</stylex>` does not. Returns the index
-/// of its `<`, or `-1` when absent.
-fn find_close_tag(doc : Array[Char], name : String, from : Int) -> Int {
+/// Index of the first raw-text `</name>` end tag at or after `from`. Raw-text
+/// parsing deliberately examines every character: browsers close `<style>` or
+/// `<script>` on an end-tag sequence even when it looks quoted to CSS/JS.
+fn find_raw_close_tag(doc : Array[Char], name : String, from : Int) -> Int {
   let needle = name.to_array()
   let n = doc.length()
   let m = needle.length()
@@ -496,6 +526,36 @@ fn find_close_tag(doc : Array[Char], name : String, from : Int) -> Int {
 }
 
 ///|
+/// Index of the first real `</name>` close tag at or after `from`, matched
+/// case-insensitively at a tag-name boundary. Ordinary markup is walked one tag
+/// at a time, so a close-tag literal inside an attribute cannot satisfy a frame
+/// or depth check; stray text `<` advances one character and cannot swallow the
+/// next tag.
+fn find_close_tag(doc : Array[Char], name : String, from : Int) -> Int {
+  let needle = name.to_array()
+  let n = doc.length()
+  let m = needle.length()
+  let mut i = from
+  while i < n {
+    if is_close_tag_start(doc, i, n) && ci_matches_at(doc, i + 2, needle) {
+      let after = i + 2 + m
+      if after >= n ||
+        is_space(doc[after]) ||
+        doc[after] == '>' ||
+        doc[after] == '/' {
+        return i
+      }
+      i = skip_tag(doc, i, n)
+    } else if is_markup_start(doc, i, n) {
+      i = skip_tag(doc, i, n)
+    } else {
+      i = i + 1
+    }
+  }
+  -1
+}
+
+///|
 /// Whether `tag` (ASCII-lowercase) names an HTML void element — one that never
 /// has content or a close tag. `match_close` returns an empty span for these so
 /// a `<img>`/`<br>` is not treated as an unclosed container.
@@ -506,7 +566,6 @@ fn is_void_tag(tag : String) -> Bool {
     | "br"
     | "col"
     | "embed"
-    | "hr"
     | "img"
     | "input"
     | "link"
@@ -567,7 +626,7 @@ fn match_close(
   let mut depth = 1
   let mut i = from
   while i < end {
-    if doc[i] == '<' {
+    if is_close_tag_start(doc, i, end) {
       match is_close_tag_at(doc, i, needle, end) {
         Some(past) => {
           depth = depth - 1
@@ -576,27 +635,23 @@ fn match_close(
           }
           i = past
         }
-        None => {
-          // A same-name open tag raises depth; any other tag is skipped whole
-          // (quote-aware), so a `>` inside an attribute value never mis-splits.
-          let mut opened = false
-          if i + 1 < end &&
-            doc[i + 1] != '/' &&
-            ci_matches_at(doc, i + 1, needle) {
-            let after = i + 1 + m
-            if after >= end ||
-              is_space(doc[after]) ||
-              doc[after] == '>' ||
-              doc[after] == '/' {
-              opened = true
-            }
-          }
-          if opened {
-            depth = depth + 1
-          }
-          i = skip_tag(doc, i, end)
+        None => i = skip_tag(doc, i, end)
+      }
+    } else if is_open_tag_start(doc, i, end) {
+      // A same-name open tag raises depth; any other tag is skipped whole
+      // (quote-aware), so a `>` inside an attribute value never mis-splits.
+      if ci_matches_at(doc, i + 1, needle) {
+        let after = i + 1 + m
+        if after >= end ||
+          is_space(doc[after]) ||
+          doc[after] == '>' ||
+          doc[after] == '/' {
+          depth = depth + 1
         }
       }
+      i = skip_tag(doc, i, end)
+    } else if is_markup_start(doc, i, end) {
+      i = skip_tag(doc, i, end)
     } else {
       i = i + 1
     }
@@ -614,13 +669,12 @@ fn classify_tag(doc : Array[Char], i : Int, end : Int) -> (String, Bool, Int) {
   let is_close = i + 1 < end && doc[i + 1] == '/'
   let name_start = if is_close { i + 2 } else { i + 1 }
   let mut j = name_start
-  while j < end && is_ascii_letter(doc[j]) {
+  while j < end && is_tag_name_char(doc[j]) {
     j = j + 1
   }
-  // The letters name a known bare tag only when a name boundary follows; a
-  // name-continuation char (a digit or `-`, as in `<rt2>` or `<ruby-foo>`) marks
-  // a different element, so blank the name to keep it from matching ruby/rt/code
-  // — the same boundary rule `find_all_open_tags` enforces on open tags.
+  // A name is accepted only when a structural boundary follows. `rt2` and
+  // `ruby-foo` remain distinct full names and therefore cannot match the
+  // furigana tags `rt`/`ruby`.
   let bounded = j >= end || is_space(doc[j]) || doc[j] == '>' || doc[j] == '/'
   let name = if bounded {
     let sb = StringBuilder::new()
@@ -689,31 +743,24 @@ fn find_by_class(
   let out : Array[Elem] = []
   let mut i = start
   while i < end {
-    if doc[i] == '<' {
-      if i + 1 < end && (doc[i + 1] == '/' || doc[i + 1] == '!') {
-        i = skip_tag(doc, i, end)
-      } else {
-        let (tag, lo, hi, past_gt) = scan_open_tag(doc, i)
-        match match_class(doc, lo, hi, tokens) {
-          Some(tk) =>
-            if want_tag == "" || want_tag == tag {
-              let (close_lt, close_past) = match_close(doc, tag, past_gt, end)
-              out.push(Elem::{
-                token: tk,
-                open_lt: i,
-                lo: past_gt,
-                hi: close_lt,
-              })
-              i = close_past
-            } else {
-              // Right class, wrong tag: descend so a nested wanted element
-              // (e.g. a real `<section class="slide">` under `<div class="slide">`)
-              // is not hidden behind this element's skipped body.
-              i = past_gt
-            }
-          None => i = past_gt
-        }
+    if is_open_tag_start(doc, i, end) {
+      let (tag, lo, hi, past_gt) = scan_open_tag(doc, i)
+      match match_class(doc, lo, hi, tokens) {
+        Some(tk) =>
+          if want_tag == "" || want_tag == tag {
+            let (close_lt, close_past) = match_close(doc, tag, past_gt, end)
+            out.push(Elem::{ token: tk, open_lt: i, lo: past_gt, hi: close_lt })
+            i = close_past
+          } else {
+            // Right class, wrong tag: descend so a nested wanted element
+            // (e.g. a real `<section class="slide">` under `<div class="slide">`)
+            // is not hidden behind this element's skipped body.
+            i = past_gt
+          }
+        None => i = past_gt
       }
+    } else if is_markup_start(doc, i, end) {
+      i = skip_tag(doc, i, end)
     } else {
       i = i + 1
     }
@@ -880,7 +927,7 @@ fn inner_text(doc : Array[Char], lo : Int, hi : Int) -> String {
   let sb = StringBuilder::new()
   let mut i = lo
   while i < hi {
-    if doc[i] == '<' {
+    if is_markup_start(doc, i, hi) {
       i = skip_tag(doc, i, hi)
     } else {
       sb.write_char(doc[i])
@@ -988,19 +1035,37 @@ fn scan_deck(doc : Array[Char]) -> Array[Slide] {
 // -- Checks ------------------------------------------------------------------
 
 ///|
+/// Whether the cleaned document carries a real `<!doctype html>` declaration.
+/// Markup is stepped atomically, so a doctype-shaped string inside an attribute
+/// cannot satisfy the envelope check.
+fn has_html_doctype(doc : Array[Char]) -> Bool {
+  let needle = "<!doctype html".to_array()
+  let n = doc.length()
+  let mut i = 0
+  while i < n {
+    if i + 1 < n && doc[i] == '<' && doc[i + 1] == '!' {
+      if ci_matches_at(doc, i, needle) {
+        let after = i + needle.length()
+        if after >= n || is_space(doc[after]) || doc[after] == '>' {
+          return true
+        }
+      }
+      i = skip_tag(doc, i, n)
+    } else if is_markup_start(doc, i, n) {
+      i = skip_tag(doc, i, n)
+    } else {
+      i = i + 1
+    }
+  }
+  false
+}
+
+///|
 /// Document-envelope checks: the doctype, the `<html lang="ja">` root, a UTF-8
 /// charset, a `<style>` closed before `<body>`, and a complete `<body>`/`</html>`
 /// close. Findings are appended to `out` in this order.
 fn check_frame(doc : Array[Char], out : Report) -> Unit {
-  let doctype = "<!doctype html".to_array()
-  let dt = index_ci(doc, doctype)
-  let doctype_ok = if dt >= 0 {
-    let after = dt + doctype.length()
-    after >= doc.length() || is_space(doc[after]) || doc[after] == '>'
-  } else {
-    false
-  }
-  if !doctype_ok {
+  if !has_html_doctype(doc) {
     out.findings.push(must("frame.doctype", "missing <!doctype html>"))
   }
   let html_tags = find_all_open_tags(doc, "html")
@@ -1195,7 +1260,7 @@ fn normalize_ja(html : String) -> String {
   let sb = StringBuilder::new()
   let mut i = 0
   while i < n {
-    if cs[i] == '<' {
+    if is_markup_start(cs, i, n) {
       let (name, is_close, past_gt) = classify_tag(cs, i, n)
       if name == "rt" && !is_close {
         let (_, close_past) = match_close(cs, "rt", past_gt, n)
@@ -1228,7 +1293,7 @@ fn check_jpf_ruby(html : String, out : Report) -> Unit {
   let cs = html.to_array()
   let n = cs.length()
   let mut in_ruby = false
-  let mut in_code = false
+  let mut code_depth = 0
   let mut in_rt = false
   let mut rt_in_ruby = 0
   let mut rt_start = 0
@@ -1238,7 +1303,7 @@ fn check_jpf_ruby(html : String, out : Report) -> Unit {
   let mut code_hid_kanji = false
   let mut i = 0
   while i < n {
-    if cs[i] == '<' {
+    if is_markup_start(cs, i, n) {
       let (name, is_close, past_gt) = classify_tag(cs, i, n)
       match (name, is_close) {
         ("ruby", false) => {
@@ -1252,6 +1317,9 @@ fn check_jpf_ruby(html : String, out : Report) -> Unit {
           rt_in_ruby = 0
         }
         ("ruby", true) => {
+          if !in_ruby {
+            bad_rt_count = true
+          }
           // `in_rt` still set at the close means the `<rt>` never closed, so its
           // reading went unchecked: treat the ruby as malformed.
           if rt_in_ruby != 1 || in_rt {
@@ -1262,7 +1330,7 @@ fn check_jpf_ruby(html : String, out : Report) -> Unit {
         }
         ("rt", false) => {
           // `<rt>` is meaningful only inside a `<ruby>`; a stray one is malformed.
-          if !in_ruby {
+          if !in_ruby || in_rt {
             bad_rt_count = true
           }
           in_rt = true
@@ -1270,30 +1338,45 @@ fn check_jpf_ruby(html : String, out : Report) -> Unit {
           rt_start = past_gt
         }
         ("rt", true) => {
-          in_rt = false
-          // A reading must carry at least one kana and nothing but kana; an empty
-          // or whitespace-only `<rt>` supplies no furigana.
-          let reading = decode_entities(range_to_string(cs, rt_start, i))
-          if !has_kana(reading) || !all_kana(reading) {
-            bad_rt_kana = true
+          if !in_rt {
+            bad_rt_count = true
+          } else {
+            // A reading must carry at least one kana and nothing but kana; an
+            // empty or whitespace-only `<rt>` supplies no furigana.
+            let reading = decode_entities(range_to_string(cs, rt_start, i))
+            if !has_kana(reading) || !all_kana(reading) {
+              bad_rt_kana = true
+            }
           }
+          in_rt = false
         }
-        ("code", false) => in_code = true
-        ("code", true) => in_code = false
+        ("code", false) => code_depth = code_depth + 1
+        ("code", true) => if code_depth > 0 { code_depth = code_depth - 1 }
         _ => ()
       }
       i = past_gt
     } else {
-      if !in_rt && !in_ruby && is_kanji(cs[i]) {
+      let mut visible = cs[i]
+      let mut next = i + 1
+      if cs[i] == '&' {
+        match parse_entity(cs, i, n) {
+          Some((decoded, past)) => {
+            visible = decoded
+            next = past
+          }
+          None => ()
+        }
+      }
+      if !in_rt && !in_ruby && is_kanji(visible) {
         // A kanji exempted only by an open `<code>` is tracked, not cleared: an
         // unclosed `<code>` must not grant a lasting coverage exemption.
-        if in_code {
+        if code_depth > 0 {
           code_hid_kanji = true
         } else {
           uncovered = true
         }
       }
-      i = i + 1
+      i = next
     }
   }
   // End-of-scan structural guards: an unclosed `<ruby>` or `<rt>` never reached
@@ -1302,7 +1385,7 @@ fn check_jpf_ruby(html : String, out : Report) -> Unit {
   if in_ruby || in_rt {
     bad_rt_count = true
   }
-  if in_code && code_hid_kanji {
+  if code_depth > 0 && code_hid_kanji {
     uncovered = true
   }
   if bad_rt_count {
@@ -1376,16 +1459,21 @@ fn check_imgs(
     let (_, lo, hi, _) = scan_open_tag(doc, lt)
     match get_attr(doc, lo, hi, "src") {
       None => out.findings.push(must("img.not_asset", "<img> without src"))
-      Some(src) =>
-        if !src.has_prefix("assets/") {
+      Some(src) => {
+        let (parent, name) = split_path(src)
+        if parent != "assets" || name == "" || !name.has_suffix(".png") {
           out.findings.push(
-            must("img.not_asset", "<img src=\"\{src}\"> not under assets/"),
+            must(
+              "img.not_asset",
+              "<img src=\"\{src}\"> must name one direct assets/*.png file",
+            ),
           )
         } else if !assets.contains(src) {
           out.findings.push(
             must("img.missing", "<img src=\"\{src}\"> has no matching asset"),
           )
         }
+      }
     }
   }
 }
@@ -1404,7 +1492,7 @@ pub fn validate_deck(
   slug : String,
   assets : @set.Set[String],
 ) -> Report {
-  let doc = strip_raw_text(strip_comments(html.to_array()))
+  let doc = clean_doc(html.to_array())
   let out = Report::{ findings: [] }
   check_frame(doc, out)
   let slides = scan_deck(doc)
@@ -1417,18 +1505,38 @@ pub fn validate_deck(
 }
 
 ///|
-/// The bundle's asset set: `assets/<name>` for each regular file in `dir/assets/`.
-/// A missing `dir/assets/` is not an error — a deck may ship zero figures — so it
-/// yields the empty set. Subdirectories are skipped: only files can back an
-/// `<img src>`, so a directory must never satisfy an `img.missing` check.
+/// The bundle's safe asset set: `assets/<name>.png` for each direct regular,
+/// non-symlink file in a real `dir/assets/` directory. Missing/invalid asset
+/// roots and entries yield no usable paths here; whole-bundle validation emits
+/// their blocking layout findings separately.
 pub async fn list_assets(dir : String) -> @set.Set[String] {
   let names : Array[String] = []
   let assets_dir = "\{dir}/assets"
-  if @fs.exists(assets_dir) {
-    for name in @fs.readdir(assets_dir) {
-      match @fs.kind("\{assets_dir}/\{name}", follow_symlink=true) {
-        @fs.Regular => names.push("assets/\{name}")
-        _ => ()
+  let is_real_dir = try @fs.kind(assets_dir, follow_symlink=false) catch {
+    _ => false
+  } noraise {
+    @fs.Directory => true
+    _ => false
+  }
+  if is_real_dir {
+    let entries = try @fs.readdir(assets_dir) catch {
+      _ => []
+    } noraise {
+      entries => entries
+    }
+    for name in entries {
+      if name.has_suffix(".png") {
+        let regular = try
+          @fs.kind("\{assets_dir}/\{name}", follow_symlink=false)
+        catch {
+          _ => false
+        } noraise {
+          @fs.Regular => true
+          _ => false
+        }
+        if regular {
+          names.push("assets/\{name}")
+        }
       }
     }
   }

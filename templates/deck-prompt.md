@@ -30,6 +30,9 @@ what its evidence supports, and what still needs human confirmation.
 - All durable writes belong under the runtime stage directory. Scratch render
   artifacts belong under `/tmp`; remove them when done. Keep source projects and
   the slide-gen template unchanged.
+- Keep the stage root closed: it contains only `deck.html`, `provenance.json`,
+  `gaps.md`, and, when figures are present, `figures.py` plus `assets/`. Every
+  bundle entry is a real file or directory rather than a symlink.
 - Secrets, credentials, tokens, private keys, PHI, row-level health data,
   personal identifiers, and potentially identifying clinical imagery must never
   enter any bundle file, including quotes, gaps, scripts, and PNG pixels.
@@ -49,9 +52,10 @@ what its evidence supports, and what still needs human confirmation.
   line-numbered reads to find the smallest sufficient evidence surface.
 - Use `git -C <source> ls-files`, `rg -n`, and `nl -ba`/`sed -n` where useful so
   citations reflect the final file contents and exact 1-based inclusive lines.
-- Build figures only with an already-available interpreter and dependencies.
-  A missing dependency or unsafe input becomes a figure placeholder plus a gap,
-  not a package installation or source-tree mutation.
+- Build figures only with an already-available interpreter and dependencies;
+  prefer Python-stdlib SVG/HTML rendered by the installed Chromium for portable,
+  repeatable output. A missing dependency or unsafe input becomes a figure
+  placeholder plus a gap, not a package installation or source-tree mutation.
 - Render the final HTML with the installed `chromiumfish` Chromium. Inspect the
   whole deck, not only slide 1; use `/tmp` for screenshots or PDFs.
 
@@ -101,8 +105,10 @@ A visible unresolved claim uses a gap row:
 {"id":"outcome-gap","slide":3,"claim":"Outcome metrics require human confirmation.","status":"gap"}
 ```
 
-Gap rows omit `src` and `quote`. IDs are unique. Every deck `data-claim` ID has
-exactly one row, and every row ID appears on at least one deck element.
+Gap rows omit `src` and `quote`. IDs are unique. `slide` is a positive integer;
+every use of that ID belongs to the declared slide and no other. Every deck
+`data-claim` ID has exactly one row, and every row ID appears on at least one
+deck element.
 
 ### `gaps.md`
 
@@ -128,7 +134,7 @@ When used:
   sources read during this run;
 - begin `figures.py` with
   `# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception`;
-- run it so every referenced `assets/*.png` exists;
+- run it so every referenced direct `assets/*.png` file exists;
 - keep raw values aggregate and non-identifying;
 - give each PNG an `<img data-claim="…">` and a provenance row citing the
   original numeric source, never `figures.py`;

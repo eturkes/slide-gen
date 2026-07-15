@@ -37,18 +37,17 @@ async fn make_bundle(
 
 ///|
 /// `validate_bundle_dir` passes a clean bundle (valid deck + a schema-valid
-/// `gap`-status provenance row + a `no gaps` disclosure) and fires exactly the
+/// empty provenance array + a `no gaps` disclosure) and fires exactly the
 /// right code for each seeded provenance or gaps defect: a missing, unparseable,
 /// or non-array `provenance.json`, a schema-invalid row, and a missing or
-/// undisclosed `gaps.md`. The baseline row is `gap` status so its source check is
-/// skipped, keeping this a schema/shell test; source and quote checks are proven
-/// separately below with real cited files.
+/// undisclosed `gaps.md`. Source and quote checks are proven separately below
+/// with real cited files.
 async test "validate_bundle_dir over seeded bundles" {
   @async.with_task_group() <| group => {
     let root = @fs.tmpdir(prefix="slide-gen-prov")
     group.add_defer(() => @fs.rmdir(root, recursive=true))
     let deck = envelope()
-    let good = "[{\"id\":\"c1\",\"slide\":1,\"claim\":\"x\",\"status\":\"gap\"}]"
+    let good = "[]"
     let bad_row = "[{\"id\":\"c1\",\"slide\":1,\"claim\":\"x\",\"status\":\"maybe\"}]"
     // Clean bundle.
     let clean = make_bundle(
@@ -176,6 +175,147 @@ async test "validate_bundle_dir guards unusable deck entries" {
     json_inspect(validate_bundle_dir(symlink, "project", root, root).codes(), content=[
       "deck.missing",
     ])
+    let target_prov = "\{root}/target.json"
+    @fs.write_file(target_prov, "[]", create_mode=CreateOrTruncate)
+    let prov_symlink = make_bundle(
+      root,
+      "prov-symlink",
+      Some(envelope()),
+      None,
+      Some("no gaps\n"),
+    )
+    @fs.symlink("\{prov_symlink}/provenance.json", target=target_prov)
+    json_inspect(
+      validate_bundle_dir(prov_symlink, "project", root, root).codes(),
+      content=["prov.missing"],
+    )
+    let target_gaps = "\{root}/target-gaps.md"
+    @fs.write_file(target_gaps, "no gaps\n", create_mode=CreateOrTruncate)
+    let gaps_symlink = make_bundle(
+      root,
+      "gaps-symlink",
+      Some(envelope()),
+      Some("[]"),
+      None,
+    )
+    @fs.symlink("\{gaps_symlink}/gaps.md", target=target_gaps)
+    json_inspect(
+      validate_bundle_dir(gaps_symlink, "project", root, root).codes(),
+      content=["gaps.missing"],
+    )
+    let real_bundle = make_bundle(
+      root,
+      "real-root",
+      Some(envelope()),
+      Some("[]"),
+      Some("no gaps\n"),
+    )
+    let linked_bundle = "\{root}/linked-root"
+    @fs.symlink(linked_bundle, target=real_bundle)
+    json_inspect(
+      validate_bundle_dir(linked_bundle, "project", root, root).codes(),
+      content=["deck.missing"],
+    )
+  }
+}
+
+///|
+/// The bundle layout is closed and no-follow: scratch root entries and symlinked
+/// assets block publication; real PNG assets require a real SPDX-marked
+/// `figures.py` and then validate cleanly.
+async test "validate_bundle_dir enforces closed real figure layout" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-bundle-layout")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let unexpected = make_bundle(
+      root,
+      "unexpected",
+      Some(envelope()),
+      Some("[]"),
+      Some("no gaps\n"),
+    )
+    @fs.write_file(
+      "\{unexpected}/scratch.txt",
+      "scratch",
+      create_mode=CreateOrTruncate,
+    )
+    json_inspect(
+      validate_bundle_dir(unexpected, "project", root, root).codes(),
+      content=["bundle.unexpected"],
+    )
+    let empty_assets = make_bundle(
+      root,
+      "empty-assets",
+      Some(envelope()),
+      Some("[]"),
+      Some("no gaps\n"),
+    )
+    @fs.mkdir("\{empty_assets}/assets")
+    json_inspect(
+      validate_bundle_dir(empty_assets, "project", root, root).codes(),
+      content=["asset.empty"],
+    )
+    let script_only = make_bundle(
+      root,
+      "script-only",
+      Some(envelope()),
+      Some("[]"),
+      Some("no gaps\n"),
+    )
+    @fs.write_file(
+      "\{script_only}/figures.py",
+      "# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\n",
+      create_mode=CreateOrTruncate,
+    )
+    json_inspect(
+      validate_bundle_dir(script_only, "project", root, root).codes(),
+      content=["figures.no_assets"],
+    )
+    let target_png = "\{root}/outside.png"
+    @fs.write_file(target_png, "png", create_mode=CreateOrTruncate)
+    let linked_asset = make_bundle(
+      root,
+      "linked-asset",
+      Some(deck_with_entry(entry() + "<img src=\"assets/f.png\">")),
+      Some("[]"),
+      Some("no gaps\n"),
+    )
+    @fs.mkdir("\{linked_asset}/assets")
+    @fs.symlink("\{linked_asset}/assets/f.png", target=target_png)
+    json_inspect(
+      validate_bundle_dir(linked_asset, "project", root, root).codes(),
+      content=["img.missing", "asset.invalid"],
+    )
+    let figure_deck = deck_with_entry(
+      entry() + "<img src=\"assets/f.png\" data-claim=\"c1\">",
+    )
+    let figure_prov = prov_gap_rows(["c1"])
+    let missing_script = make_bundle(
+      root,
+      "missing-script",
+      Some(figure_deck),
+      Some(figure_prov),
+      Some("- Fixture figure claim is unresolved.\n"),
+    )
+    @fs.mkdir("\{missing_script}/assets")
+    @fs.write_file(
+      "\{missing_script}/assets/f.png",
+      "png",
+      create_mode=CreateOrTruncate,
+    )
+    json_inspect(
+      validate_bundle_dir(missing_script, "project", root, root).codes(),
+      content=["figures.missing"],
+    )
+    @fs.write_file(
+      "\{missing_script}/figures.py",
+      "# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\n",
+      create_mode=CreateOrTruncate,
+    )
+    json_inspect(
+      validate_bundle_dir(missing_script, "project", root, root).codes(),
+      content=[],
+    )
   }
 }
 
@@ -201,7 +341,9 @@ async test "validate_bundle_dir source and quote checks" {
     let deck_home = "\{src_base}/decks"
     @fs.mkdir(src_base)
     @fs.mkdir(deck_home)
-    let deck = envelope()
+    let deck = deck_with_entry(
+      entry_of("a", "a", "<span data-claim=\"c1\">x</span>"),
+    )
     @fs.write_file(
       "\{src_base}/src.md",
       "alpha\nbeta gamma\ndelta\n",
@@ -309,6 +451,66 @@ async test "validate_bundle_dir source and quote checks" {
       validate_bundle_dir(relative_escape, "project", src_base, deck_home).codes(),
       content=["prov.src_outside"],
     )
+    // A directly symlinked sibling project remains an allowed source root.
+    let external_project = "\{root}/linked-project"
+    @fs.mkdir(external_project)
+    @fs.write_file(
+      "\{external_project}/evidence.md",
+      "linked evidence\n",
+      create_mode=CreateOrTruncate,
+    )
+    @fs.symlink("\{src_base}/linked", target=external_project)
+    let linked_project = make_bundle(
+      deck_home,
+      "linked-project-source",
+      Some(deck),
+      Some(prov_one("verified", "linked/evidence.md:1-1", "linked evidence")),
+      Some("no gaps\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(linked_project, "project", src_base, deck_home).codes(),
+      content=[],
+    )
+    // A nested symlink under a real sibling directory may not escape that root.
+    @fs.mkdir("\{src_base}/inside")
+    @fs.symlink("\{src_base}/inside/escape.md", target="\{root}/outside.md")
+    let nested_escape = make_bundle(
+      deck_home,
+      "nested-symlink-escape",
+      Some(deck),
+      Some(prov_one("verified", "inside/escape.md:1-1", "outside")),
+      Some("no gaps\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(nested_escape, "project", src_base, deck_home).codes(),
+      content=["prov.src_outside"],
+    )
+    // A symlink that resolves back into any generated deck is self-citation.
+    @fs.symlink("\{src_base}/inside/deck.md", target="\{clean}/deck.html")
+    let real_reentry = make_bundle(
+      deck_home,
+      "real-symlink-reentry",
+      Some(deck),
+      Some(prov_one("verified", "inside/deck.md:1-1", "<!doctype html>")),
+      Some("no gaps\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(real_reentry, "project", src_base, deck_home).codes(),
+      content=["prov.self_citation"],
+    )
+    // A direct symlinked file is not a symlinked project directory.
+    @fs.symlink("\{src_base}/outside-link.md", target="\{root}/outside.md")
+    let direct_file_escape = make_bundle(
+      deck_home,
+      "direct-file-symlink",
+      Some(deck),
+      Some(prov_one("verified", "outside-link.md:1-1", "outside")),
+      Some("no gaps\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(direct_file_escape, "project", src_base, deck_home).codes(),
+      content=["prov.src_outside"],
+    )
     // Missing source file.
     let missing = make_bundle(
       deck_home,
@@ -351,7 +553,7 @@ async test "validate_bundle_dir source and quote checks" {
       "gap",
       Some(deck),
       Some("[{\"id\":\"c1\",\"slide\":1,\"claim\":\"x\",\"status\":\"gap\"}]"),
-      Some("no gaps\n"),
+      Some("- Source evidence is unresolved in this fixture.\n"),
     )
     json_inspect(
       validate_bundle_dir(gap, "project", src_base, deck_home).codes(),
@@ -398,7 +600,7 @@ async test "validate_bundle_dir deck cross-reference" {
           entry_of("a", "a", "<span data-claim=\"ghost\">x</span>"),
         ),
       ),
-      Some(prov_gap_rows(["c1"])),
+      Some("[]"),
       Some("no gaps\n"),
     )
     json_inspect(validate_bundle_dir(dangling, "project", root, root).codes(), content=[
@@ -412,7 +614,7 @@ async test "validate_bundle_dir deck cross-reference" {
         deck_with_entry(entry_of("a", "a", "<span data-claim=\"c1\">x</span>")),
       ),
       Some(prov_gap_rows(["c1"])),
-      Some("no gaps\n"),
+      Some("- Fixture claim is intentionally unresolved.\n"),
     )
     json_inspect(validate_bundle_dir(tagged, "project", root, root).codes(), content=[])
     // A data-claim hidden inside an HTML comment is stripped before the
@@ -431,7 +633,7 @@ async test "validate_bundle_dir deck cross-reference" {
         ),
       ),
       Some(prov_gap_rows(["c1"])),
-      Some("no gaps\n"),
+      Some("- Fixture claim is intentionally unresolved.\n"),
     )
     json_inspect(
       validate_bundle_dir(commented, "project", root, root).codes(),
@@ -470,6 +672,111 @@ async test "validate_bundle_dir deck cross-reference" {
 }
 
 ///|
+/// Provenance IDs form an exact unique set with deck claims, and each row's
+/// positive slide number must own that ID. Duplicate rows, reverse-parity
+/// orphans, and slide drift are blocking rather than prompt-only advice.
+async test "validate_bundle_dir enforces unique parity and claim slide" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-prov-parity")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let deck = deck_with_entry(
+      entry_of("a", "a", "<span data-claim=\"c1\">x</span>"),
+    )
+    let duplicate_orphan = make_bundle(
+      root,
+      "duplicate-orphan",
+      Some(deck),
+      Some(
+        "[{\"id\":\"c1\",\"slide\":1,\"claim\":\"x\",\"status\":\"gap\"},{\"id\":\"c1\",\"slide\":1,\"claim\":\"duplicate\",\"status\":\"gap\"},{\"id\":\"c2\",\"slide\":1,\"claim\":\"orphan\",\"status\":\"gap\"}]",
+      ),
+      Some("- Fixture claims are unresolved.\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(duplicate_orphan, "project", root, root).codes(),
+      content=["prov.duplicate_id", "prov.unreferenced_row"],
+    )
+    let wrong_slide = make_bundle(
+      root,
+      "wrong-slide",
+      Some(deck),
+      Some("[{\"id\":\"c1\",\"slide\":2,\"claim\":\"x\",\"status\":\"gap\"}]"),
+      Some("- Fixture claim is unresolved.\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(wrong_slide, "project", root, root).codes(),
+      content=["prov.slide_mismatch"],
+    )
+    let repeated_across_slides = make_bundle(
+      root,
+      "repeated-across-slides",
+      Some(
+        envelope(
+          sections=slide_of(
+              eyebrow("01"),
+              entry_of("a", "a", "<span data-claim=\"c1\">x</span>"),
+              pageno("project \u{b7} 1 / 2"),
+            ) +
+            slide_of(
+              eyebrow("02"),
+              entry_of("b", "b", "<span data-claim=\"c1\">x</span>"),
+              pageno("project \u{b7} 2 / 2"),
+            ),
+        ),
+      ),
+      Some(prov_gap_rows(["c1"])),
+      Some("- Fixture claim is unresolved.\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(repeated_across_slides, "project", root, root).codes(),
+      content=["prov.slide_mismatch"],
+    )
+    let contradicted = make_bundle(
+      root,
+      "contradicted",
+      Some(deck),
+      Some(prov_gap_rows(["c1"])),
+      Some("no gaps\n"),
+    )
+    json_inspect(
+      validate_bundle_dir(contradicted, "project", root, root).codes(),
+      content=["gaps.contradiction"],
+    )
+  }
+}
+
+///|
+/// Comment/raw-text openers inside quoted attributes stay inert during the
+/// unified clean pass, so a dangling claim between paired decoys remains live
+/// and cannot escape the anti-hallucination cross-reference.
+async test "quoted cleaner decoys cannot hide a dangling claim" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-prov-cleaner")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    for
+      item in [
+        (
+          "comment", "<span title=\"<!--\">a</span><span data-claim=\"ghost\">x</span><span title=\"-->\">b</span>",
+        ),
+        (
+          "raw", "<span title=\"<style>\">a</span><span data-claim=\"ghost\">x</span><span title=\"</style>\">b</span>",
+        ),
+      ] {
+      let (name, body) = item
+      let bundle = make_bundle(
+        root,
+        name,
+        Some(deck_with_entry(entry_of("a", "a", body))),
+        Some("[]"),
+        Some("no gaps\n"),
+      )
+      json_inspect(validate_bundle_dir(bundle, "project", root, root).codes(), content=[
+        "prov.dangling_claim",
+      ])
+    }
+  }
+}
+
+///|
 /// `validate_bundle_dir`'s SHOULD coverage warnings: a numbered `.entry` with no
 /// `data-claim` warns `prov.untagged_number` while a tagged sibling stays silent;
 /// a committed PNG shown by an `<img>` carrying no `data-claim` warns
@@ -493,7 +800,7 @@ async test "validate_bundle_dir coverage warnings" {
         ),
       ),
       Some(prov_gap_rows(["c1"])),
-      Some("no gaps\n"),
+      Some("- Fixture claim is intentionally unresolved.\n"),
     )
     let untagged_report = validate_bundle_dir(untagged, "project", root, root)
     json_inspect(untagged_report.codes(), content=["prov.untagged_number"])
@@ -505,11 +812,16 @@ async test "validate_bundle_dir coverage warnings" {
       root,
       "uncited",
       Some(deck_with_entry(entry() + "<img src=\"assets/f.png\">")),
-      Some(prov_gap_rows(["c1"])),
+      Some("[]"),
       Some("no gaps\n"),
     )
     @fs.mkdir("\{uncited}/assets")
     @fs.write_file("\{uncited}/assets/f.png", "x", create_mode=CreateOrTruncate)
+    @fs.write_file(
+      "\{uncited}/figures.py",
+      "# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\n",
+      create_mode=CreateOrTruncate,
+    )
     let uncited_report = validate_bundle_dir(uncited, "project", root, root)
     json_inspect(uncited_report.codes(), content=["prov.asset_uncited"])
     assert_true(uncited_report.ok())
@@ -524,10 +836,15 @@ async test "validate_bundle_dir coverage warnings" {
         ),
       ),
       Some(prov_gap_rows(["c1", "c2"])),
-      Some("no gaps\n"),
+      Some("- Fixture claims are intentionally unresolved.\n"),
     )
     @fs.mkdir("\{clean}/assets")
     @fs.write_file("\{clean}/assets/f.png", "x", create_mode=CreateOrTruncate)
+    @fs.write_file(
+      "\{clean}/figures.py",
+      "# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\n",
+      create_mode=CreateOrTruncate,
+    )
     json_inspect(validate_bundle_dir(clean, "project", root, root).codes(), content=[])
   }
 }
@@ -563,17 +880,14 @@ async test "shipped template claim examples satisfy bundle cross-reference" {
 }
 
 ///|
-/// M2.4's promoted live bundles remain validator-clean acceptance fixtures when
-/// their sibling source projects are available. Standalone clones skip only the
-/// source-dependent quote checks; the committed bundles remain versioned and
-/// their structure is covered by the ordinary deck tests.
-async test "committed live bundles pass when their sources are available" {
+/// M2.4's promoted live bundles remain acceptance fixtures in every clone. When
+/// a sibling source exists, its report is fully clean. When absent, only the
+/// expected per-row `prov.src_missing` findings are filtered: deck structure,
+/// schema, exact cross-reference, gaps, assets, and figure checks still run.
+async test "committed live bundles retain contract with optional sources" {
   guard find_repo_root() is Some(root) else { return }
   let source_base = split_path(root).0
   for project in ["spine-segmentation", "rehab"] {
-    if !@fs.exists("\{source_base}/\{project}") {
-      continue
-    }
     let bundle = "\{root}/decks/\{project}"
     let report = validate_bundle_dir(
       bundle,
@@ -581,7 +895,23 @@ async test "committed live bundles pass when their sources are available" {
       source_base,
       "\{root}/decks",
     )
-    json_inspect(report.codes(), content=[])
+    if @fs.exists("\{source_base}/\{project}") {
+      json_inspect(report.codes(), content=[])
+    } else {
+      let mut missing_sources = 0
+      let structural_codes = report
+        .codes()
+        .filter(fn(code) {
+          if code == "prov.src_missing" {
+            missing_sources = missing_sources + 1
+            false
+          } else {
+            true
+          }
+        })
+      assert_true(missing_sources > 0)
+      json_inspect(structural_codes, content=[])
+    }
     let figures = @fs.read_file("\{bundle}/figures.py").text()
     assert_true(
       figures.has_prefix(

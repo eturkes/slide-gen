@@ -13,13 +13,13 @@ default:
 # Format MoonBit + authoring-time Python sources in place.
 fmt:
     moon fmt
-    uv run --locked --only-dev ruff format tools
+    uv run --locked --only-dev ruff format tools decks/*/figures.py
 
-# Type-check MoonBit; lint + format-check the Python sidecar.
+# Type-check MoonBit; lint + format-check every tracked Python authoring source.
 check:
     moon check --target {{target}}
-    uv run --locked --only-dev ruff check tools
-    uv run --locked --only-dev ruff format --check tools
+    uv run --locked --only-dev ruff check tools decks/*/figures.py
+    uv run --locked --only-dev ruff format --check tools decks/*/figures.py
 
 # Build the native binary.
 build:

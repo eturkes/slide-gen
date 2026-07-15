@@ -1,8 +1,3 @@
-# Claude Code — track shared settings.json, ignore machine-local override
-.claude/settings.local.json
-# Headroom live-wrap marker (ephemeral pid/port/env key; per session, removed on exit)
-.claude/.headroom_wrap_marker.json
-
 # Python / uv (per-layer envs)
 .venv/
 .venv-host/
@@ -20,9 +15,6 @@ _build/
 target/
 .mooncakes/
 .moonagent/
-
-# Headroom tokensave code-graph state (regenerable; Serena's self-ignores via .serena/.gitignore)
-.tokensave/
 
 # slide-gen runtime state + generated decks
 enabled.txt

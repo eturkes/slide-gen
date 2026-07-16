@@ -5,9 +5,11 @@
 /// their enable/disable state, `enable`/`disable`/`toggle` mutate the persisted
 /// set for the named project, and `generate` authors a project's deck via codex
 /// (`--dry-run` previews the invocation). `render` turns one committed deck into
-/// page PNGs plus PDF without consulting sibling discovery or enabled state. A
+/// page PNGs plus PDF without consulting sibling discovery or enabled state;
+/// `run` generates then renders one sibling or every enabled sibling. A
 /// subcommand is required. Mutations and render take exactly one name;
-/// `generate` accepts zero or one, with omission selecting every enabled project.
+/// `generate` and `run` accept zero or one, with omission selecting every enabled
+/// project.
 pub fn cli() -> @argparse.Command {
   let name_arg = [
     @argparse.PositionArg(
@@ -71,6 +73,11 @@ pub fn cli() -> @argparse.Command {
         "render",
         about="Render one committed deck to page PNGs and PDF.",
         positionals=render_name_arg,
+      ),
+      @argparse.Command(
+        "run",
+        about="Generate then render one sibling or every enabled sibling.",
+        positionals=optional_name_arg,
       ),
     ],
   )

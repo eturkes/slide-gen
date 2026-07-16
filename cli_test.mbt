@@ -61,6 +61,21 @@ test "render subcommand parses one required deck name" {
 }
 
 ///|
+/// `run` accepts one current sibling or no positional for enabled-set batch
+/// mode. It intentionally exposes no dry-run flag: generation's dry run remains
+/// the exact spend preview, while an end-to-end render cannot be previewed.
+test "run subcommand parses one optional sibling name" {
+  guard cli().parse(argv=["run", "projA"]).subcommand is Some((key, named))
+  inspect(key, content="run")
+  guard named.values.get("name") is Some(names)
+  inspect(names[0], content="projA")
+  guard cli().parse(argv=["run"]).subcommand is Some((_, batch))
+  assert_true(
+    batch.values.get("name") is None || batch.values.get("name") is Some([]),
+  )
+}
+
+///|
 /// Final render outcomes map to one stable CLI line and status. Success names
 /// the exact PDF plus page count; failures retain their machine code and detail
 /// with exactly one trailing newline.

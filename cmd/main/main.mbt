@@ -25,7 +25,7 @@ fn get_name(sub : @argparse.Matches) -> String {
 }
 
 ///|
-/// Pull `generate`'s optional `name` positional. Argparse may represent an
+/// Pull `generate`/`run`'s optional `name` positional. Argparse may represent an
 /// omitted ranged positional as no map entry or an empty value array; both mean
 /// enabled-set batch mode.
 fn get_optional_name(sub : @argparse.Matches) -> String? {
@@ -158,6 +158,35 @@ async fn main {
               }
             }
           }
+          Some(("run", sub)) =>
+            match get_optional_name(sub) {
+              Some(target) => {
+                if !projects.contains(target) {
+                  die(
+                    "slide-gen: unknown project '\{target}' (run `slide-gen list` to see candidates)\n",
+                    1,
+                  )
+                }
+                let (message, code) = @lib.run_cli_outcome(
+                  @lib.run_project(root, target),
+                )
+                if code == 0 {
+                  @stdio.stdout.write(message)
+                } else {
+                  die(message, code)
+                }
+              }
+              None => {
+                let (message, code) = @lib.run_enabled(
+                  root, projects, state_path,
+                )
+                @stdio.stdout.write(message)
+                if code != 0 {
+                  c_exit(code)
+                  abort("unreachable: exit returned")
+                }
+              }
+            }
           _ => ()
         }
       }

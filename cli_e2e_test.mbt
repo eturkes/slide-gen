@@ -273,6 +273,102 @@ async test "generate dry-run end-to-end" {
 }
 
 ///|
+/// Deterministic `run` CLI coverage without Codex spend: an empty enabled set
+/// succeeds, stale state is reported on batch stdout, a named candidate reaches
+/// generation and fails at the deliberately absent runtime prompt before Codex,
+/// unknown names are rejected, and `--dry-run` remains generate-only.
+async test "run dispatch and batch failures end-to-end without codex" {
+  guard @env.get_env_var("SLIDE_GEN_BIN") is Some(bin) else { return }
+  @async.with_task_group() <| group => {
+    let tmp = @fs.tmpdir(prefix="slide-gen-run-e2e")
+    group.add_defer(() => @fs.rmdir(tmp, recursive=true))
+    let projects_dir = "\{tmp}/Projects"
+    let repo = "\{projects_dir}/slide-gen"
+    @fs.mkdir(repo, recursive=true)
+    @fs.mkdir("\{projects_dir}/projA")
+    @fs.write_file(
+      "\{repo}/moon.mod",
+      "name = \"eturkes/slide-gen\"\n",
+      create_mode=CreateOrTruncate,
+    )
+
+    // Missing state = an empty enabled set, successful without phase dispatch.
+    let (code, out, err) = @process.collect_output(bin, ["run"], cwd=repo)
+    assert_eq(code, 0, msg=err.text())
+    assert_eq(err.text(), "")
+    inspect(
+      out.text(),
+      content=(
+        #|summary: 0 succeeded, 0 failed, 0 total
+        #|
+      ),
+    )
+
+    // Stale-only state is never passed to generation and remains a batch result
+    // on stdout despite the aggregate runtime failure status.
+    @fs.write_file(
+      "\{repo}/enabled.txt",
+      "ghost\n",
+      create_mode=CreateOrTruncate,
+    )
+    let (code, out, err) = @process.collect_output(bin, ["run"], cwd=repo)
+    assert_eq(code, 1)
+    assert_eq(err.text(), "")
+    inspect(
+      out.text(),
+      content=(
+        #|[FAILED] ghost
+        #|enabled project is missing; run `slide-gen disable -- ghost` to clear it
+        #|
+        #|summary: 0 succeeded, 1 failed, 1 total
+        #|
+      ),
+    )
+
+    // A named current sibling bypasses enabled state. With no prompt contract,
+    // generation fails deterministically before invoking Codex and render never
+    // creates a live project output.
+    let (code, out, err) = @process.collect_output(
+      bin,
+      ["run", "projA"],
+      cwd=repo,
+    )
+    assert_eq(code, 1)
+    assert_eq(out.text(), "")
+    assert_true(
+      err
+      .text()
+      .has_prefix(
+        "slide-gen: run failed during generation: prompt load failed:",
+      ),
+    )
+    assert_false(@fs.exists("\{repo}/decks/projA"))
+    assert_false(@fs.exists("\{repo}/renders/projA"))
+
+    let (code, _, err) = @process.collect_output(
+      bin,
+      ["run", "ghost"],
+      cwd=repo,
+    )
+    assert_eq(code, 1)
+    inspect(
+      err.text(),
+      content=(
+        #|slide-gen: unknown project 'ghost' (run `slide-gen list` to see candidates)
+        #|
+      ),
+    )
+
+    let (code, _, _) = @process.collect_output(
+      bin,
+      ["run", "--dry-run"],
+      cwd=repo,
+    )
+    assert_eq(code, 2)
+  }
+}
+
+///|
 /// Explicit-spend acceptance gate for the production batch path. SLIDE_GEN_LIVE
 /// and the built-binary gate must both be present; ordinary test runs return
 /// before setup. Two enabled synthetic siblings plus the shipped contracts keep

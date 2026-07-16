@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic:
+    name: Deterministic gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          checksum: "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
+          python-version: "3.12.13"
+          enable-cache: false
+
+      - name: Install pinned MoonBit toolchain
+        env:
+          MOONBIT_ARCHIVE_SHA256: 5cce093c6795211fcade5e5ff697d88ec4ff416d2785197f004188aca724a753
+          MOONBIT_CORE_SHA256: e2bf3cc765412055242384fb72a618b62ad4889eae11956251ff921839d022d2
+        run: |
+          set -euo pipefail
+          moon_home=$HOME/.moon
+          archive=$RUNNER_TEMP/moonbit-linux-x86_64.tar.gz
+          core=$RUNNER_TEMP/moonbit-core.tar.gz
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+            -o "$archive" \
+            'https://cli.moonbitlang.com/binaries/0.10.4%2Bade96c819/moonbit-linux-x86_64.tar.gz'
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+            -o "$core" \
+            'https://cli.moonbitlang.com/cores/core-0.10.4%2Bade96c819.tar.gz'
+          printf '%s  %s\n' "$MOONBIT_ARCHIVE_SHA256" "$archive" | sha256sum -c -
+          printf '%s  %s\n' "$MOONBIT_CORE_SHA256" "$core" | sha256sum -c -
+          rm -rf "$moon_home"
+          mkdir -p "$moon_home/lib"
+          tar -xf "$archive" -C "$moon_home"
+          tar -xf "$core" -C "$moon_home/lib"
+          /usr/bin/find "$moon_home/bin" -type f -exec chmod +x {} +
+          PATH="$moon_home/bin:$PATH" moon -C "$moon_home/lib/core" bundle --warn-list -a --all
+          PATH="$moon_home/bin:$PATH" moon -C "$moon_home/lib/core" bundle --warn-list -a --target wasm-gc --quiet
+          version=$("$moon_home/bin/moon" version --all)
+          printf '%s\n' "$version"
+          [[ $version == *'moon 0.1.20260713 (75c7e1f 2026-07-13)'* ]]
+          [[ $version == *'moonc v0.10.4+ade96c819 (2026-07-13)'* ]]
+          [[ $version == *'moonrun 0.1.20260713 (75c7e1f 2026-07-13)'* ]]
+          printf '%s\n' "$moon_home/bin" >>"$GITHUB_PATH"
+
+      - name: Install pinned ShellCheck
+        env:
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          set -euo pipefail
+          archive=$RUNNER_TEMP/shellcheck.tar.xz
+          destination=$RUNNER_TEMP/shellcheck-bin
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+            -o "$archive" \
+            'https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz'
+          printf '%s  %s\n' "$SHELLCHECK_SHA256" "$archive" | sha256sum -c -
+          mkdir -p "$destination"
+          tar -xf "$archive" -C "$destination" --strip-components=1 \
+            shellcheck-v0.11.0/shellcheck
+          test "$("$destination/shellcheck" --version | sed -n '2s/version: //p')" = '0.11.0'
+          printf '%s\n' "$destination" >>"$GITHUB_PATH"
+
+      - name: Install pinned just
+        env:
+          JUST_SHA256: fa2a8ec1015d9df5330941ade12437488fc40d33f9c9f8cd4eb70a26de11b639
+        run: |
+          set -euo pipefail
+          archive=$RUNNER_TEMP/just.tar.gz
+          destination=$RUNNER_TEMP/just-bin
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+            -o "$archive" \
+            'https://github.com/casey/just/releases/download/1.56.0/just-1.56.0-x86_64-unknown-linux-musl.tar.gz'
+          printf '%s  %s\n' "$JUST_SHA256" "$archive" | sha256sum -c -
+          mkdir -p "$destination"
+          tar -xf "$archive" -C "$destination"
+          test "$("$destination/just" --version)" = 'just 1.56.0'
+          printf '%s\n' "$destination" >>"$GITHUB_PATH"
+
+      - name: Run tracked-baseline-preserving CI
+        run: just ci

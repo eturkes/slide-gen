@@ -20,7 +20,7 @@ check:
     moon check --target {{target}}
     uv run --locked --only-dev ruff check tools decks/*/figures.py
     uv run --locked --only-dev ruff format --check tools decks/*/figures.py
-    shellcheck bin/slide-gen tools/install.sh tools/install_smoke.sh
+    shellcheck bin/slide-gen tools/*.sh
 
 # Build the native binary.
 build:
@@ -42,6 +42,27 @@ install-smoke:
 
 # Full gate sweep: format, check, build, test, install smoke.
 all: fmt check build test install-smoke
+
+# Deterministic tracked-baseline gate: cold-cache capable, read-only, no live spend.
+ci:
+    tools/ci.sh just _ci-gates
+
+[private]
+_ci-gates:
+    moon fmt --check
+    uv sync --locked --all-groups
+    uv run --locked --all-groups --no-sync ruff check tools decks/*/figures.py
+    uv run --locked --all-groups --no-sync ruff format --check tools decks/*/figures.py
+    shellcheck bin/slide-gen tools/*.sh
+    tools/moon_deps.sh
+    moon check --target {{target}} --deny-warn
+    moon check --target {{target}} --frozen --deny-warn
+    moon build --target {{target}} --frozen --deny-warn
+    env -u SLIDE_GEN_LIVE -u SLIDE_GEN_RENDER_CLI_LIVE -u SLIDE_GEN_RENDER_DOM_LIVE -u SLIDE_GEN_RENDER_RASTER_LIVE -u SLIDE_GEN_RENDER_PDF_LIVE SLIDE_GEN_BIN="$(pwd -P)/_build/{{target}}/debug/build/cmd/slide-gen/slide-gen.exe" moon test --target {{target}} --frozen --deny-warn
+    uv run --locked --all-groups --no-sync python -m unittest discover -s tools -p '*_test.py'
+    moon build --target {{target}} --release --frozen --deny-warn
+    mkdir -p .install/ci-tmp
+    TMPDIR="$(pwd -P)/.install/ci-tmp" tools/install_smoke.sh
 
 # Probe DOM parity, repeatable rasters, and lossless PDF assembly on the live surface.
 render-probe: build

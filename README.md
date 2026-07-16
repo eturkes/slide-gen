@@ -189,6 +189,7 @@ just ci            # deterministic; format-check only; tracked baseline guard
 just all           # local sweep; formats sources in place
 just render-probe  # real Chromium DOM/raster/PDF probes; no Codex
 just live-render   # render both published decks twice; no Codex
+just live-run      # token spend: installed generate-to-PDF proof
 SLIDE_GEN_LIVE=1 just test # token spend: two-project live generation fixture
 ```
 
@@ -197,6 +198,8 @@ SLIDE_GEN_LIVE=1 just test # token spend: two-project live generation fixture
 > `SLIDE_GEN_LIVE=0` activates Codex and `just all` inherits it. Unset the
 > variable before `just test` or `just all`. `just ci` strips every live switch.
 > The two-project live fixture may make four Codex invocations after retries.
+> `just live-run` is independently explicit and may make two Codex invocations
+> if its one-project generation needs the production retry.
 
 `just ci` syncs the locked Python environment, runs one MoonBit dependency
 bootstrap step designed to work from cold caches, verifies the downloaded
@@ -217,8 +220,13 @@ just, ShellCheck, and the MoonBit package archive on the canonical Ubuntu
 stack. Codex and Chromium gates stay explicit local jobs because they require
 authentication, spend, and the fixed browser/font surface.
 
-The two-project `SLIDE_GEN_LIVE=1 just test` fixture proves generation only. A
-full installed real-Codex `run`, render, PDF-structure, and visual proof remains
-the open M4.5 roadmap unit; there is no `just live-run` recipe yet.
+The two-project `SLIDE_GEN_LIVE=1 just test` fixture proves generation only.
+`just live-run` instead copies the prospective nonignored tree into a clean
+nested Git checkout under `.install/`, installs its launcher into a hidden
+sibling bin, and invokes one enabled-set `run` from outside that checkout. It
+independently revalidates the final bundle and render layout, uses Poppler to
+require ordered 2560x1440-point lossless page images at 72 dpi, and leaves
+rasterized inspection pages at the printed scratch path. The outer
+tracked-baseline wrapper proves the source checkout unchanged.
 
 Licensed under [Apache-2.0 WITH LLVM-exception](LICENSE).

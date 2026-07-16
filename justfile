@@ -58,7 +58,7 @@ _ci-gates:
     moon check --target {{target}} --deny-warn
     moon check --target {{target}} --frozen --deny-warn
     moon build --target {{target}} --frozen --deny-warn
-    env -u SLIDE_GEN_LIVE -u SLIDE_GEN_RENDER_CLI_LIVE -u SLIDE_GEN_RENDER_DOM_LIVE -u SLIDE_GEN_RENDER_RASTER_LIVE -u SLIDE_GEN_RENDER_PDF_LIVE SLIDE_GEN_BIN="$(pwd -P)/_build/{{target}}/debug/build/cmd/slide-gen/slide-gen.exe" moon test --target {{target}} --frozen --deny-warn
+    env -u SLIDE_GEN_LIVE -u SLIDE_GEN_LIVE_RUN_ROOT -u SLIDE_GEN_LIVE_RUN_PROJECT -u SLIDE_GEN_RENDER_CLI_LIVE -u SLIDE_GEN_RENDER_DOM_LIVE -u SLIDE_GEN_RENDER_RASTER_LIVE -u SLIDE_GEN_RENDER_PDF_LIVE SLIDE_GEN_BIN="$(pwd -P)/_build/{{target}}/debug/build/cmd/slide-gen/slide-gen.exe" moon test --target {{target}} --frozen --deny-warn
     uv run --locked --all-groups --no-sync python -m unittest discover -s tools -p '*_test.py'
     moon build --target {{target}} --release --frozen --deny-warn
     mkdir -p .install/ci-tmp
@@ -73,6 +73,10 @@ render-probe: build
 # Render both committed decks twice through the CLI and prove byte stability.
 live-render: build
     SLIDE_GEN_BIN="$(realpath "$(/usr/bin/find _build/{{target}} -name slide-gen.exe -path '*cmd/slide-gen*' -print -quit)")" SLIDE_GEN_RENDER_CLI_LIVE=1 moon test --target {{target}} -f '*render CLI repeats both committed six-page decks byte identically*'
+
+# Token-spending installed end-to-end proof in an isolated nested checkout.
+live-run:
+    tools/ci.sh tools/live_run.sh
 
 # Run the CLI; pass program args after `--` (e.g. `just run -- --help`).
 run *args:

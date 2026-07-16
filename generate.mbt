@@ -594,24 +594,15 @@ async fn generate_project_from_baseline(
 }
 
 ///|
-/// Generate one named project with the production Codex producer. Recover an
-/// interrupted prior publication before capturing the tracked baseline, so the
-/// legitimate restoration is part of the accepted starting state rather than a
-/// false escaped-write finding. The ignored stage is absent from the comparison;
-/// every tracked path remains protected until promotion.
-pub async fn generate_project(root : String, project : String) -> GenOutcome {
+/// Generate one named project while the caller owns its shared project-operation
+/// lease. Recover an interrupted prior publication before capturing the tracked
+/// baseline, so the legitimate restoration is part of the accepted starting
+/// state rather than a false escaped-write finding. The ignored stage is absent
+/// from the comparison; every tracked path remains protected until promotion.
+/// Package orchestrators use this seam to compose generation with a later phase
+/// under one lease; public callers use `generate_project`, which owns the lease.
+async fn generate_project_locked(root : String, project : String) -> GenOutcome {
   let plan = plan_generate(root, project)
-  let lock_file = match acquire_project_operation_lock(root, project) {
-    ProjectOperationLocked(file) => file
-    ProjectOperationBusy =>
-      return ExecFailed(
-        "project operation busy: another generate/render owns \{project}",
-      )
-    ProjectOperationLockFailed(error) =>
-      return ExecFailed("project operation lock failed: \{error}")
-  }
-  defer lock_file.close()
-  defer lock_file.unlock()
   let recovery_error : String? = try
     recover_publication(plan.publication())
   catch {
@@ -624,6 +615,25 @@ pub async fn generate_project(root : String, project : String) -> GenOutcome {
     None => ()
   }
   generate_project_from_baseline(root, project, tracked_git_snapshot(root))
+}
+
+///|
+/// Public generation entry. Acquire exactly one non-blocking project-operation
+/// lease, retain the established busy/setup diagnostics, and delegate all
+/// recovery and production work to the package-owned already-locked seam.
+pub async fn generate_project(root : String, project : String) -> GenOutcome {
+  let lock_file = match acquire_project_operation_lock(root, project) {
+    ProjectOperationLocked(file) => file
+    ProjectOperationBusy =>
+      return ExecFailed(
+        "project operation busy: another generate/render owns \{project}",
+      )
+    ProjectOperationLockFailed(error) =>
+      return ExecFailed("project operation lock failed: \{error}")
+  }
+  defer lock_file.close()
+  defer lock_file.unlock()
+  generate_project_locked(root, project)
 }
 
 ///|

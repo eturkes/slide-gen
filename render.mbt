@@ -1473,9 +1473,12 @@ async fn complete_render_with(
 }
 
 ///|
-/// Production entry: recover an interrupted prior render publication, execute
-/// validator/browser/raster/PDF stages, then atomically replace live.
-pub async fn render_project(
+/// Production render core used while the caller owns the shared project-operation
+/// lease. Recover an interrupted prior publication, execute validator/browser/
+/// raster/PDF stages, then atomically replace live. Package orchestrators use
+/// this seam to compose phases under one lease; public callers use
+/// `render_project`, which owns the lease.
+async fn render_project_locked(
   root : String,
   project : String,
   timeout_secs? : Int = default_render_timeout_secs,
@@ -1485,21 +1488,6 @@ pub async fn render_project(
       "render.project", "render project must be a non-dot representable direct-child name under an absolute root",
     )
   }
-  let lock_file = match acquire_project_operation_lock(root, project) {
-    ProjectOperationLocked(file) => file
-    ProjectOperationBusy =>
-      return final_render_failed(
-        "render.project.busy",
-        "another generate/render operation owns project \{project}",
-      )
-    ProjectOperationLockFailed(error) =>
-      return final_render_failed(
-        "render.project.lock",
-        "could not acquire project operation lock: \{error}",
-      )
-  }
-  defer lock_file.close()
-  defer lock_file.unlock()
   let recovery_error : String? = try {
     recover_publication(plan.publication())
     None
@@ -1527,6 +1515,38 @@ pub async fn render_project(
     publish=promote_stage,
     timeout_secs~,
   )
+}
+
+///|
+/// Public final-render entry. Reject invalid targets before filesystem access,
+/// acquire exactly one non-blocking project-operation lease, retain the stable
+/// busy/setup diagnostics, and delegate to the package-owned locked core.
+pub async fn render_project(
+  root : String,
+  project : String,
+  timeout_secs? : Int = default_render_timeout_secs,
+) -> RenderOutcome {
+  guard plan_render(root, project) is Some(_) else {
+    return final_render_failed(
+      "render.project", "render project must be a non-dot representable direct-child name under an absolute root",
+    )
+  }
+  let lock_file = match acquire_project_operation_lock(root, project) {
+    ProjectOperationLocked(file) => file
+    ProjectOperationBusy =>
+      return final_render_failed(
+        "render.project.busy",
+        "another generate/render operation owns project \{project}",
+      )
+    ProjectOperationLockFailed(error) =>
+      return final_render_failed(
+        "render.project.lock",
+        "could not acquire project operation lock: \{error}",
+      )
+  }
+  defer lock_file.close()
+  defer lock_file.unlock()
+  render_project_locked(root, project, timeout_secs~)
 }
 
 ///|

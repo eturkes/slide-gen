@@ -488,6 +488,79 @@ async test "generate project reports a concurrent project operation" {
 }
 
 ///|
+/// The package-owned generation core neither reacquires nor releases its
+/// caller's lease. It restores an interrupted deck before reaching the
+/// deterministic missing-prompt failure; the public wrapper then reaches the
+/// same core after the caller releases the lease and releases its own lease on
+/// return.
+async test "generate locked core delegates beneath one caller lease" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-generate-locked-core")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let plan = gen_stub_plan(root)
+    @fs.mkdir(plan.backup_dir, recursive=true)
+    @fs.write_file(
+      "\{plan.backup_dir}/sentinel",
+      "old",
+      create_mode=CreateOrTruncate,
+    )
+    async fn run_under_caller_lease() -> Unit {
+      let lock_file = match acquire_project_operation_lock(root, "project") {
+        ProjectOperationLocked(file) => file
+        ProjectOperationBusy => abort("setup project lock was busy")
+        ProjectOperationLockFailed(error) =>
+          abort("setup project lock failed: \{error}")
+      }
+      defer lock_file.close()
+      defer lock_file.unlock()
+      guard generate_project_locked(root, "project") is ExecFailed(message) else {
+        abort("locked generation unexpectedly completed")
+      }
+      assert_true(message.has_prefix("prompt load failed:"))
+      assert_eq(@fs.read_file("\{plan.deck_dir}/sentinel").text(), "old")
+      assert_false(@fs.exists(plan.backup_dir))
+      assert_true(
+        acquire_project_operation_lock(root, "project") is ProjectOperationBusy,
+      )
+    }
+
+    run_under_caller_lease()
+    guard generate_project(root, "project") is ExecFailed(message) else {
+      abort("public generation unexpectedly completed")
+    }
+    assert_true(message.has_prefix("prompt load failed:"))
+    let reacquired = match acquire_project_operation_lock(root, "project") {
+      ProjectOperationLocked(file) => file
+      ProjectOperationBusy => abort("public generation retained its lease")
+      ProjectOperationLockFailed(error) =>
+        abort("project lock failed after generation: \{error}")
+    }
+    defer reacquired.close()
+    defer reacquired.unlock()
+  }
+}
+
+///|
+/// Lock-directory setup failure stays distinct from a busy lease and stops
+/// before generation creates or recovers any deck publication paths.
+async test "generate project reports project lock setup failure" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-generate-lock-setup")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    @fs.write_file("\{root}/renders", "blocked", create_mode=CreateOrTruncate)
+    guard generate_project(root, "project") is ExecFailed(message) else {
+      abort("generation accepted a forged render root")
+    }
+    assert_true(
+      message.has_prefix(
+        "project operation lock failed: could not establish lock directory:",
+      ),
+    )
+    assert_false(@fs.exists("\{root}/decks"))
+  }
+}
+
+///|
 /// A producer that exits successfully without writing deck.html is validated as
 /// a retained `deck.missing` failure, retried once, and left staged for inspection.
 async test "stage_validate_promote retains an invalid bundle after one retry" {

@@ -1361,6 +1361,49 @@ async test "render project recovers interrupted publication before preflight" {
 }
 
 ///|
+/// The package-owned render core runs beneath a caller-held lease without
+/// reacquiring it, retains deterministic failures, and leaves lease lifetime to
+/// that caller. This is the composition seam used by the later run orchestrator.
+async test "render locked core delegates beneath one caller lease" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-render-locked-core")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    let lock_file = match acquire_project_operation_lock(root, "project") {
+      ProjectOperationLocked(file) => file
+      ProjectOperationBusy => abort("setup project lock was busy")
+      ProjectOperationLockFailed(error) =>
+        abort("setup project lock failed: \{error}")
+    }
+    defer lock_file.close()
+    defer lock_file.unlock()
+    let failure = final_render_failure(render_project_locked(root, "project"))
+    assert_eq(failure.code, "render.deck.directory")
+    assert_true(
+      acquire_project_operation_lock(root, "project") is ProjectOperationBusy,
+    )
+  }
+}
+
+///|
+/// Final-render lock setup failure keeps its stable machine code and stops
+/// before publication recovery or preflight can create a stage.
+async test "render project reports project lock setup failure" {
+  @async.with_task_group() <| group => {
+    let root = @fs.tmpdir(prefix="slide-gen-render-lock-setup")
+    group.add_defer(() => @fs.rmdir(root, recursive=true))
+    @fs.write_file("\{root}/renders", "blocked", create_mode=CreateOrTruncate)
+    let failure = final_render_failure(render_project(root, "project"))
+    assert_eq(failure.code, "render.project.lock")
+    assert_true(
+      failure.detail.has_prefix(
+        "could not acquire project operation lock: could not establish lock directory:",
+      ),
+    )
+    assert_false(@fs.exists("\{root}/decks"))
+  }
+}
+
+///|
 /// Every public render entry fails before touching the stage when generation or
 /// a peer render already owns the project operation lease.
 async test "render entries report a concurrent project operation" {

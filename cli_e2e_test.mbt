@@ -110,7 +110,7 @@ async test "cli end-to-end" {
       "name = \"other/nested\"\n",
       create_mode=CreateOrTruncate,
     )
-    let deep = "\{repo}/cmd/main"
+    let deep = "\{repo}/cmd/slide-gen"
     @fs.mkdir(deep)
     let (code, out, _) = @process.collect_output(bin, ["list"], cwd=deep)
     assert_eq(code, 0)

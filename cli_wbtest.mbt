@@ -21,7 +21,8 @@ test "cli help" {
       #|  help      Print help for the subcommand(s).
       #|
       #|Options:
-      #|  -h, --help  Show help information.
+      #|  -h, --help     Show help information.
+      #|  -V, --version  Show version information.
       #|
     ),
   )

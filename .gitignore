@@ -17,6 +17,9 @@ target/
 .mooncakes/
 .moonagent/
 
+# Checkout-bound native install payload/build cache
+.install/
+
 # slide-gen runtime state + generated/derived output
 enabled.txt
 enabled.txt.tmp

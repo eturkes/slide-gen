@@ -1,0 +1,52 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+set -eu
+
+fail() {
+  printf '%s\n' "slide-gen: launcher: $*" >&2
+  exit 127
+}
+
+# Resolve invocation through PATH plus an arbitrary relative/absolute symlink
+# chain. Canonicalizing each parent makes a user-bin link reliably lead back to
+# this checkout without GNU readlink -f or a caller-cwd assumption.
+launcher=$0
+case $launcher in
+  */*) ;;
+  *)
+    launcher=$(command -v "$launcher" 2>/dev/null) ||
+      fail "cannot resolve launcher path"
+    ;;
+esac
+case $launcher in
+  /*) ;;
+  *) launcher=$(pwd -P)/$launcher ;;
+esac
+
+hops=0
+while [ -L "$launcher" ]; do
+  [ "$hops" -lt 40 ] || fail "symlink chain exceeds 40 hops"
+  target=$(readlink "$launcher") || fail "cannot read symlink: $launcher"
+  case $target in
+    /*) launcher=$target ;;
+    *) launcher=${launcher%/*}/$target ;;
+  esac
+  hops=$((hops + 1))
+done
+
+launcher_dir=${launcher%/*}
+launcher_name=${launcher##*/}
+launcher_dir=$(CDPATH='' cd -P "$launcher_dir" 2>/dev/null && pwd) ||
+  fail "cannot resolve checkout path"
+launcher=$launcher_dir/$launcher_name
+repo=${launcher_dir%/*}
+payload=$repo/.install/bin/slide-gen
+
+[ -f "$repo/moon.mod" ] || fail "checkout marker is missing: $repo/moon.mod"
+if [ ! -f "$payload" ] || [ ! -x "$payload" ] || [ -L "$payload" ]; then
+  fail "native payload is missing; run 'just install' in $repo"
+fi
+
+cd "$repo" || fail "cannot enter checkout: $repo"
+exec "$payload" "$@"

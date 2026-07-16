@@ -20,6 +20,7 @@ check:
     moon check --target {{target}}
     uv run --locked --only-dev ruff check tools decks/*/figures.py
     uv run --locked --only-dev ruff format --check tools decks/*/figures.py
+    shellcheck bin/slide-gen tools/install.sh tools/install_smoke.sh
 
 # Build the native binary.
 build:
@@ -27,11 +28,20 @@ build:
 
 # Run MoonBit + Python suites; SLIDE_GEN_LIVE=1 opts into Codex.
 test: build
-    SLIDE_GEN_BIN="$(realpath "$(/usr/bin/find _build/{{target}} -name main.exe -path '*cmd/main*' -print -quit)")" moon test --target {{target}}
+    SLIDE_GEN_BIN="$(realpath "$(/usr/bin/find _build/{{target}} -name slide-gen.exe -path '*cmd/slide-gen*' -print -quit)")" moon test --target {{target}}
     uv run --locked --no-dev python -m unittest discover -s tools -p '*_test.py'
 
-# Full gate sweep: format, check, build, test.
-all: fmt check build test
+# Install the checkout-bound launcher; override SLIDE_GEN_INSTALL_BIN as needed.
+install:
+    tools/install.sh "${SLIDE_GEN_INSTALL_BIN:-${HOME}/.local/bin}"
+
+# Exercise local moon install, launcher safety, cwd/argv/status/signal forwarding,
+# idempotence, and payload independence from _build.
+install-smoke:
+    tools/install_smoke.sh
+
+# Full gate sweep: format, check, build, test, install smoke.
+all: fmt check build test install-smoke
 
 # Probe DOM parity, repeatable rasters, and lossless PDF assembly on the live surface.
 render-probe: build
@@ -41,8 +51,8 @@ render-probe: build
 
 # Render both committed decks twice through the CLI and prove byte stability.
 live-render: build
-    SLIDE_GEN_BIN="$(realpath "$(/usr/bin/find _build/{{target}} -name main.exe -path '*cmd/main*' -print -quit)")" SLIDE_GEN_RENDER_CLI_LIVE=1 moon test --target {{target}} -f '*render CLI repeats both committed six-page decks byte identically*'
+    SLIDE_GEN_BIN="$(realpath "$(/usr/bin/find _build/{{target}} -name slide-gen.exe -path '*cmd/slide-gen*' -print -quit)")" SLIDE_GEN_RENDER_CLI_LIVE=1 moon test --target {{target}} -f '*render CLI repeats both committed six-page decks byte identically*'
 
 # Run the CLI; pass program args after `--` (e.g. `just run -- --help`).
 run *args:
-    moon run cmd/main --target {{target}} {{args}}
+    moon run cmd/slide-gen --target {{target}} {{args}}

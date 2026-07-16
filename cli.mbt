@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 ///|
+/// User-facing CLI version. Keep aligned with `moon.mod`'s module version.
+pub let cli_version = "0.1.0"
+
+///|
 /// Build the root CLI command. `list` shows discovered sibling projects, `status`
 /// their enable/disable state, `enable`/`disable`/`toggle` mutate the persisted
 /// set for the named project, and `generate` authors a project's deck via codex
@@ -35,6 +39,7 @@ pub fn cli() -> @argparse.Command {
   @argparse.Command(
     "slide-gen",
     about="Generate and manage slide decks across sibling projects.",
+    version=cli_version,
     subcommand_required=true,
     subcommands=[
       @argparse.Command("list", about="List discovered sibling projects."),

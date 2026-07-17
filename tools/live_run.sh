@@ -150,6 +150,10 @@ case $pages in
   '' | *[!0-9]*) fail "pdfinfo returned an invalid page count: $pages" ;;
 esac
 [ "$pages" -gt 0 ] || fail "PDF has no pages"
+published_pages=$(/usr/bin/find "$render_dir" -maxdepth 1 -type f \
+  -name 'page_*.png' -print | wc -l)
+[ "$published_pages" -eq "$pages" ] ||
+  fail "published PNG count $published_pages does not match PDF page count $pages"
 LC_ALL=C pdfinfo -f 1 -l "$pages" -box "$pdf" >"$info" ||
   fail "pdfinfo could not enumerate every PDF page"
 if command grep -E '^(CreationDate|ModDate):' "$info" >/dev/null; then

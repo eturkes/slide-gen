@@ -38,11 +38,13 @@ export PATH="$HOME/.local/bin:$PATH" # when that directory is not already on PAT
 slide-gen --version
 ```
 
-`just install` builds `.install/bin/slide-gen` and links the checkout's
-`bin/slide-gen` launcher into `~/.local/bin`. Override the destination with
-`SLIDE_GEN_INSTALL_BIN=/absolute/bin just install`. Re-running it is safe for
-the same checkout; it refuses to replace a foreign file or symlink. The checkout
-must remain at the installed path.
+`just install` builds a private candidate under `.install/`, atomically replaces
+`.install/bin/slide-gen` only after that candidate is a regular executable, and
+links the checkout's `bin/slide-gen` launcher into `~/.local/bin`. Override the
+destination with `SLIDE_GEN_INSTALL_BIN=/absolute/bin just install`. Re-running
+it is safe for the same checkout; a failed build retains the prior payload, and
+the installer refuses to replace a foreign file or symlink. The checkout must
+remain at the installed path.
 
 After updating the checkout, rebuild the native payload. The developer gate is
 optional for an operator update:
@@ -207,11 +209,14 @@ dependency archive, then uses frozen/deny-warning gates. It builds release
 output and exercises the same non-frozen `moon install` path used by operators,
 plus the launcher in repo-local scratch.
 
-The wrapper captures Git-observable HEAD, staged entries, persistent index
-flags, status, and index-to-worktree changes before and after the gate. Existing
-staged or unstaged work is allowed; a gate-induced tracked change fails and is
-left for inspection. Every untracked file - including ignored dependencies,
-build output, and install caches - is outside that promise.
+The wrapper captures Git-observable HEAD identity, staged entries, persistent
+index flags, status, and index-to-worktree changes before and after the gate. A
+private index copy clears `assume-unchanged` and `skip-worktree` while hashing
+worktree changes, so those pre-existing flags cannot hide a gate mutation and
+the real index remains untouched. Existing staged or unstaged work is allowed;
+a gate-induced tracked change fails and is left for inspection. Every untracked
+file - including ignored dependencies, build output, and install caches - is
+outside that promise.
 
 Local `just ci` uses the locally installed MoonBit, uv, just, and ShellCheck.
 GitHub CI runs only `just ci` with `contents: read`, disabled checkout
@@ -225,8 +230,9 @@ The two-project `SLIDE_GEN_LIVE=1 just test` fixture proves generation only.
 nested Git checkout under `.install/`, installs its launcher into a hidden
 sibling bin, and invokes one enabled-set `run` from outside that checkout. It
 independently revalidates the final bundle and render layout, uses Poppler to
-require ordered 2560x1440-point lossless page images at 72 dpi, and leaves
-rasterized inspection pages at the printed scratch path. The outer
-tracked-baseline wrapper proves the source checkout unchanged.
+require the PDF page count to match the published PNG set plus one ordered
+2560x1440-point lossless page image at 72 dpi per page, and leaves rasterized
+inspection pages at the printed scratch path. The outer tracked-baseline wrapper
+proves the source checkout unchanged.
 
 Licensed under [Apache-2.0 WITH LLVM-exception](LICENSE).

@@ -16,7 +16,7 @@ Seed: commit `0526d53` (repo init: deck.html, agent guidance, `.agent` boilerpla
 - **M1 CLI foundation** — discovery + toggle state (no codex, no render). STATUS: **REVIEWED**.
 - **M2 Generation** — `codex exec` per project → template-styled deck BUNDLE (`deck.html` + `provenance.json` + `gaps.md` + `figures.py` + `assets/*.png`), gated by a deterministic MoonBit validator. STATUS: **REVIEWED**.
 - **M3 Rendering** — `deck.html` → per-page PNG → PDF@72dpi; mirror prototype `render.py` (chromiumfish + raster, section count from DOM). STATUS: **REVIEWED**.
-- **M4 Integration / packaging / docs** — end-to-end generate+render `run` over the enabled set, checkout-bound installation, README, quality gates. STATUS: **IMPLEMENTED**.
+- **M4 Integration / packaging / docs** — end-to-end generate+render `run` over the enabled set, checkout-bound installation, README, quality gates. STATUS: **REVIEWED**.
 
 M1-M3 decisions live in their reviewed sections. M4's end-to-end orchestration, installation, and quality-gate decisions are resolved below; no later milestone is currently parked.
 
@@ -108,7 +108,7 @@ Sequence: M3.1a (gate-independent shared publication) → M3.1b (browser-input s
 
 ---
 
-## M4 — Integration / packaging / docs (IMPLEMENTED)
+## M4 — Integration / packaging / docs (REVIEWED)
 
 Scope: `slide-gen run [<project>]` is the production generate→render path. A name runs one current sibling even when disabled; omission runs the enabled set sequentially. Each successful item leaves a validator-clean committed deck plus `renders/<project>/{page_NN.png,deck.pdf}`. M4 also supplies a Debian/Linux checkout-bound install, a human README, deterministic CI, and one explicit-spend live proof. It does not publish a standalone binary/archive: the mutable Git checkout is intentionally the deck home and carries runtime templates, Python sidecars/lock, committed bundles, and local state.
 
@@ -120,6 +120,14 @@ Scope: `slide-gen run [<project>]` is the production generate→render path. A n
 - **Checkout-bound native install** — MoonBit's 2026-07 `moon install [SOURCE]` now installs native main packages and accepts local paths/`--bin`; the probe of `./cmd/main` installed a binary literally named `main`. Rename the executable package to `cmd/slide-gen`, stage it repo-locally with `moon install`, and install a thin POSIX launcher symlink into a configurable user bin (default `~/.local/bin`). The launcher resolves its own symlink back to this checkout, enters the repo, and execs the staged native binary, so every command works from unrelated directories without duplicating or guessing the deck home. Installation is idempotent but fails rather than replacing an unrelated destination. Mooncakes/Git-URL install is deliberately unsupported because it installs only the executable, not the required mutable app/resource home.
 - **Quality split** — keep `just all` as the local format-in-place sweep; add a read-only `just ci` using `moon fmt --check`, frozen dependencies, denied MoonBit warnings, locked uv, shell lint, tests, release/install smoke, and a tracked before/after fingerprint (so intended uncommitted work is allowed but gate-induced mutation is not). GitHub Actions runs only this deterministic gate on pinned Ubuntu/MoonBit/uv/action revisions with read-only repository permission; Codex and Chromium gates stay explicit local jobs because they require auth, spend, and the canonical browser/font surface.
 - **Acceptance boundary** — an opt-in `just live-run` builds a disposable one-project sibling/repo fixture, invokes real Codex then real Chromium/PDF through the production `run` path, validates the promoted bundle/render, inspects the PDF structure plus rasterized pages, and proves the tracked source tree unchanged. The install smoke separately invokes the installed launcher from outside the checkout. README must surface the whole-bundle privacy review, bypassed-Codex residuals, provenance limits, external prerequisites, state/output layout, failure semantics, and every deterministic/live gate.
+
+### Review closure
+
+Exhaustive plan/unit/current-tree review accepted and fixed three guarantee gaps: Git's `assume-unchanged`/`skip-worktree` bits could hide a gate-induced worktree mutation from the claimed CI baseline (private index copy now clears both bits, captures symbolic HEAD identity, and has independent dirty/hidden/detach regressions); `moon install` wrote directly over the live payload (a unique candidate stage + validated same-filesystem rename now retains the prior executable on a simulated partial-writing failure); and the installed live proof never equated its published PNG count with the PDF page count (now exact before Poppler structure checks). Current primary release metadata confirms the full-SHA checkout/setup-uv action pins; actionlint v1.7.12 is green.
+
+Final gates: `just all` + `just ci` = 171 MoonBit + 7 Python tests, zero warnings/lint, CI/install smokes and release build green; `just render-probe` + `just live-render` green. A fresh `just live-run` installed the prospective tree and promoted a validator-clean four-slide Aurora Queue bundle with one source-cited chart; MoonBit revalidation, exact four-PNG/four-PDF-page parity, and Poppler proved ordered 2560×1440-point zero-rotation pages with one RGB/8-bit 2560×1440 lossless image each at 72 dpi. The figure reproduced byte-identically across repeated runs; all four PDF rasters were ordered, unclipped, asset-complete, and tofu-free; privacy-pattern/source-citation scan and both tracked baselines were clean.
+
+Accepted limits: the CI promise covers Git-observable tracked HEAD/index/worktree state, not untracked/ignored files or Git metadata beyond the captured HEAD/index surfaces; its scratch is an integrity alarm, not a hostile-command security boundary. Installer checks/publication remain path-based and cooperating concurrent installs share Moon's ignored build cache, though the live payload replacement itself is atomic. Real-Codex/browser output remains environment- and fixed-surface-dependent under the M2/M3 security/reproducibility limits.
 
 ### Units
 

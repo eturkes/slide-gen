@@ -3,6 +3,26 @@
 
 set -eu
 
+# Fake `moon install` used below: write a plausible executable into the supplied
+# bin directory, then fail. The production installer must keep that partial
+# candidate isolated from its previously working payload.
+if [ "${SLIDE_GEN_INSTALL_SMOKE_FAKE_MOON:-}" = partial-failure ]; then
+  fake_bin=
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = --bin ]; then
+      shift
+      [ "$#" -gt 0 ] || exit 97
+      fake_bin=$1
+    fi
+    shift
+  done
+  [ -n "$fake_bin" ] || exit 97
+  mkdir -p "$fake_bin"
+  printf '%s\n' '#!/bin/sh' 'exit 99' >"$fake_bin/slide-gen"
+  chmod +x "$fake_bin/slide-gen"
+  exit 42
+fi
+
 fail() {
   printf '%s\n' "install smoke: $*" >&2
   exit 1
@@ -62,6 +82,24 @@ installed=$public_bin/slide-gen
 if [ ! -f "$payload" ] || [ ! -x "$payload" ] || [ -L "$payload" ]; then
   fail "native payload is missing or unsafe"
 fi
+
+# A failed Moon invocation may leave only its private candidate stage; it must
+# not alter the previously installed command byte or break that command.
+payload_before=$tmp/payload.before
+fake_moon_bin=$tmp/fake-moon-bin
+cp "$payload" "$payload_before"
+mkdir "$fake_moon_bin"
+ln -s "$repo/tools/install_smoke.sh" "$fake_moon_bin/moon"
+set +e
+SLIDE_GEN_INSTALL_SMOKE_FAKE_MOON=partial-failure \
+PATH="$fake_moon_bin:$PATH" \
+  "$repo/tools/install.sh" "$public_bin" \
+  >"$tmp/partial.out" 2>"$tmp/partial.err"
+partial_status=$?
+set -e
+[ "$partial_status" -ne 0 ] || fail "partial Moon failure was accepted"
+cmp -s "$payload_before" "$payload" ||
+  fail "failed install replaced the working native payload"
 
 version=$(cd "$outside" && "$installed" --version) ||
   fail "installed --version failed outside the checkout"

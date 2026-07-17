@@ -40,8 +40,12 @@ install:
 install-smoke:
     tools/install_smoke.sh
 
-# Full gate sweep: format, check, build, test, install smoke.
-all: fmt check build test install-smoke
+# Exercise the tracked-baseline wrapper against dirty and hidden-index states.
+ci-smoke:
+    tools/ci_smoke.sh
+
+# Full gate sweep: format, check, build, tests, and shell acceptance smokes.
+all: fmt check build test install-smoke ci-smoke
 
 # Deterministic tracked-baseline gate: cold-cache capable, read-only, no live spend.
 ci:
@@ -54,6 +58,7 @@ _ci-gates:
     uv run --locked --all-groups --no-sync ruff check tools decks/*/figures.py
     uv run --locked --all-groups --no-sync ruff format --check tools decks/*/figures.py
     shellcheck bin/slide-gen tools/*.sh
+    tools/ci_smoke.sh
     tools/moon_deps.sh
     moon check --target {{target}} --deny-warn
     moon check --target {{target}} --frozen --deny-warn

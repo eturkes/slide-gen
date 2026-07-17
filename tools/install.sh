@@ -23,6 +23,18 @@ script_dir=$(CDPATH='' cd -P "$(dirname "$0")" 2>/dev/null && pwd) ||
 repo=$(CDPATH='' cd -P "$script_dir/.." 2>/dev/null && pwd) ||
   fail "cannot resolve checkout"
 launcher=$repo/bin/slide-gen
+stage=
+
+cleanup() {
+  if [ -n "$stage" ]; then
+    rm -rf "$stage"
+  fi
+}
+trap cleanup 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 if [ ! -f "$launcher" ] || [ ! -x "$launcher" ] || [ -L "$launcher" ]; then
   fail "tracked launcher is missing or unsafe: $launcher"
 fi
@@ -68,21 +80,32 @@ if [ -L "$payload" ]; then
 elif [ -e "$payload" ] && [ ! -f "$payload" ]; then
   fail "native payload path is not a regular file: $payload"
 fi
+stage=$(mktemp -d "$install_root/.install-stage.XXXXXX") ||
+  fail "cannot create native payload stage"
+stage_bin=$stage/bin
+candidate=$stage_bin/slide-gen
+mkdir "$stage_bin"
 
 command -v moon >/dev/null 2>&1 || fail "moon is not on PATH"
 cd "$repo" || fail "cannot enter checkout: $repo"
 moon install \
   --target-dir "$build_dir" \
-  --bin "$payload_dir" \
+  --bin "$stage_bin" \
   ./cmd/slide-gen
 
-if [ ! -f "$payload" ] || [ ! -x "$payload" ] || [ -L "$payload" ]; then
-  fail "moon install did not produce a regular executable: $payload"
+if [ ! -f "$candidate" ] || [ ! -x "$candidate" ] || [ -L "$candidate" ]; then
+  fail "moon install did not produce a regular executable: $candidate"
 fi
 
 # Recheck after the build to close the ordinary check/build/link race. `ln -s`
 # has no force flag, so a last-moment foreign arrival is still never clobbered.
 check_destination
+mv -fT "$candidate" "$payload" || fail "cannot publish native payload: $payload"
+rm -rf "$stage"
+stage=
+if [ ! -f "$payload" ] || [ ! -x "$payload" ] || [ -L "$payload" ]; then
+  fail "published native payload is not a regular executable: $payload"
+fi
 if [ ! -L "$destination" ]; then
   ln -s "$launcher" "$destination" ||
     fail "cannot create launcher symlink: $destination"

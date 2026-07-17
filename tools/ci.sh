@@ -60,19 +60,41 @@ trap 'forward_signal INT 130' INT
 trap 'forward_signal TERM 143' TERM
 
 # Preserve Git-observable tracked state, not merely a clean/dirty bit. HEAD plus
-# staged entries and persistent index flags close index holes; porcelain plus a
-# binary index-to-worktree diff closes already-dirty content holes. Untracked
-# and ignored files are outside the promised baseline and may be populated.
+# staged entries and persistent index flags close index holes. Worktree content
+# is diffed through a private index copy with every assume-unchanged and
+# skip-worktree bit cleared; those flags otherwise hide later mutations from
+# ordinary status/diff. The real index stays untouched. Untracked and ignored
+# files are outside the promised baseline and may be populated.
 snapshot() {
   destination=$1
   mkdir "$destination" || return 1
   git rev-parse --verify HEAD >"$destination/head" || return 1
+  git symbolic-ref -q HEAD >"$destination/head-name" || {
+    symbolic_status=$?
+    [ "$symbolic_status" -eq 1 ] || return 1
+    printf '%s\n' '(detached)' >"$destination/head-name" || return 1
+  }
   git ls-files --stage -z >"$destination/index" || return 1
   git ls-files -v -z >"$destination/index-flags" || return 1
   git ls-files -f -z >"$destination/fsmonitor-flags" || return 1
   git status --porcelain=v1 -z --untracked-files=no >"$destination/status" ||
     return 1
-  git diff \
+  index_input=$(git rev-parse --git-path index) || return 1
+  case $index_input in
+    /*) ;;
+    *) index_input=$repo/$index_input ;;
+  esac
+  private_index=$destination/private-index
+  tracked_paths=$destination/tracked-paths
+  cp "$index_input" "$private_index" || return 1
+  git ls-files -z >"$tracked_paths" || return 1
+  GIT_INDEX_FILE=$private_index git update-index \
+    --no-assume-unchanged -z --stdin <"$tracked_paths" || return 1
+  GIT_INDEX_FILE=$private_index git update-index \
+    --no-skip-worktree -z --stdin <"$tracked_paths" || return 1
+  GIT_INDEX_FILE=$private_index git update-index \
+    -q --unmerged --really-refresh || return 1
+  GIT_INDEX_FILE=$private_index git diff \
     --binary \
     --full-index \
     --no-ext-diff \
@@ -80,6 +102,7 @@ snapshot() {
     --no-renames \
     --ignore-submodules=none \
     -- >"$destination/worktree" || return 1
+  rm -f "$private_index" "$tracked_paths" || return 1
 }
 
 snapshot "$before" || fail "could not capture the initial tracked baseline"
@@ -108,7 +131,7 @@ if ! snapshot "$after"; then
   fail "could not capture the final tracked baseline"
 fi
 baseline_changed=false
-for component in head index index-flags fsmonitor-flags status worktree; do
+for component in head head-name index index-flags fsmonitor-flags status worktree; do
   if ! cmp -s "$before/$component" "$after/$component"; then
     baseline_changed=true
   fi

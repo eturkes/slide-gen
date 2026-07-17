@@ -1,3 +1,10 @@
+# Claude Code — track shared settings, ignore machine-local/runtime files
+.claude/settings.local.json
+.claude/.headroom_wrap_marker.json
+
+# Headroom TokenSave code-graph state (regenerable)
+.tokensave/
+
 # Python / uv (per-layer envs)
 .venv/
 .venv-host/

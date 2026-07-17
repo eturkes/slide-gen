@@ -2,7 +2,7 @@
 
 Goal: a CLI + home for slides across `~/Projects/*`. Discover sibling projects → toggle on/off → `codex exec` generates a `deck.html`-style deck per enabled project → render to PDF. The repo is the deck home: `templates/deck.html` = style contract; `decks/<project>/` = generated output.
 
-Stack: **MoonBit (native backend)** — the agent-oriented bet (AGENTS.md ethos). UX = flag subcommands (no TUI). State = gitignored local. Discovery = all sibling dirs, default-off. (Owner-confirmed at M2 plan.)
+Stack: **MoonBit (native backend)** — the agent-oriented bet (`CLAUDE.md` ethos). UX = flag subcommands (no TUI). State = gitignored local. Discovery = all sibling dirs, default-off. (Owner-confirmed at M2 plan.)
 
 Seed: commit `0526d53` (repo init: deck.html, agent guidance, `.agent` boilerplate) + the `templates/deck.html` move. `deck.html` = the content-stripped generalization of the proven prototype `~/Projects/spine-segmentation/docs/slides/` (filled deck.html + figures.py + render.py → PDF) — M2/M3 mirror it (mechanics in memory.md).
 

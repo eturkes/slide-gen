@@ -1,6 +1,6 @@
 # Memory — slide-gen
 
-Cross-session context + learned facts for Codex. Record only what git log / roadmap don't already hold.
+Cross-session context + learned facts (agent-agnostic). Record only what git log / roadmap don't already hold.
 
 ## Project
 - License `Apache-2.0 WITH LLVM-exception`. Per-source header when `.mbt`/scripts land: `SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception`.

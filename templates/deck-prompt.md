@@ -77,6 +77,11 @@ what its evidence supports, and what still needs human confirmation.
 - Every `.entry` has exactly three descendants in this order:
   `.jp` = natural Japanese, `.jpf` = identical Japanese with furigana, `.en` =
   concise English gloss. Keep each entry to one evidence unit when practical.
+- Write the Japanese (`.jp` and `.jpf`) in the plain, declarative register of a
+  standard Japanese slide deck (常体): dictionary-form verbs (e.g. `正規化する`,
+  `示す`, `含まない`) and 体言止め (noun-final phrases) for definitions and
+  results. Do not use polite です・ます endings (teineigo): no `.jp`/`.jpf`
+  sentence may end in `です`, `ます`, `ません`, `でした`, or `ました`.
 - In `.jpf`, wrap every kanji character outside `<code>` in a `<ruby>` base with
   exactly one non-empty all-kana `<rt>`. Removing every `<rt>` must leave the same
   normalized Japanese text as `.jp`. When a reading cannot be verified, use the

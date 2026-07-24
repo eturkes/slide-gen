@@ -84,18 +84,18 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
   <div class="eyebrow"><span class="n">01</span><span>目的 &nbsp;·&nbsp; purpose</span></div>
   <div class="text-stack">
     <div class="entry" data-claim="purpose-baseline">
-      <div class="jp">目的： 公開の VerSe 2020 CT を用い、CPU で椎骨を分割するベースラインです。</div>
-      <div class="jpf"><ruby>目的<rt>もくてき</rt></ruby>： <ruby>公開<rt>こうかい</rt></ruby>の VerSe 2020 CT を<ruby>用<rt>もち</rt></ruby>い、CPU で<ruby>椎骨<rt>ついこつ</rt></ruby>を<ruby>分割<rt>ぶんかつ</rt></ruby>するベースラインです。</div>
+      <div class="jp">目的： 公開の VerSe 2020 CT を用い、CPU で椎骨を分割するベースライン。</div>
+      <div class="jpf"><ruby>目的<rt>もくてき</rt></ruby>： <ruby>公開<rt>こうかい</rt></ruby>の VerSe 2020 CT を<ruby>用<rt>もち</rt></ruby>い、CPU で<ruby>椎骨<rt>ついこつ</rt></ruby>を<ruby>分割<rt>ぶんかつ</rt></ruby>するベースライン。</div>
       <div class="en"><b>Purpose:</b> a CPU vertebra-segmentation baseline validated on public VerSe 2020 CT.</div>
     </div>
     <div class="entry" data-claim="purpose-model">
-      <div class="jp">モデル： TotalSegmentator を CPU で実行します。</div>
-      <div class="jpf">モデル： TotalSegmentator を CPU で<ruby>実行<rt>じっこう</rt></ruby>します。</div>
+      <div class="jp">モデル： TotalSegmentator を CPU で実行する。</div>
+      <div class="jpf">モデル： TotalSegmentator を CPU で<ruby>実行<rt>じっこう</rt></ruby>する。</div>
       <div class="en"><b>Model:</b> TotalSegmentator runs on CPU.</div>
     </div>
     <div class="entry" data-claim="purpose-qa">
-      <div class="jp">QA 出力： ヘッドレス PNG と 3D Slicer シーンで視覚確認を行います。</div>
-      <div class="jpf">QA <ruby>出力<rt>しゅつりょく</rt></ruby>： ヘッドレス PNG と 3D Slicer シーンで<ruby>視覚確認<rt>しかくかくにん</rt></ruby>を<ruby>行<rt>おこな</rt></ruby>います。</div>
+      <div class="jp">QA 出力： ヘッドレス PNG と 3D Slicer シーンで視覚確認を行う。</div>
+      <div class="jpf">QA <ruby>出力<rt>しゅつりょく</rt></ruby>： ヘッドレス PNG と 3D Slicer シーンで<ruby>視覚確認<rt>しかくかくにん</rt></ruby>を<ruby>行<rt>おこな</rt></ruby>う。</div>
       <div class="en"><b>QA outputs:</b> headless PNG montages and a 3D Slicer scene support visual review.</div>
     </div>
   </div>
@@ -106,18 +106,18 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
   <div class="eyebrow"><span class="n">02</span><span>保護された推論 &nbsp;·&nbsp; guarded inference</span></div>
   <div class="text-stack">
     <div class="entry" data-claim="guard-preflight">
-      <div class="jp">実行経路： <code>spine-seg</code> はオフライン事前検査とグリッド・ボクセル検証を通ります。</div>
-      <div class="jpf"><ruby>実行経路<rt>じっこうけいろ</rt></ruby>： <code>spine-seg</code> はオフライン<ruby>事前検査<rt>じぜんけんさ</rt></ruby>とグリッド・ボクセル<ruby>検証<rt>けんしょう</rt></ruby>を<ruby>通<rt>とお</rt></ruby>ります。</div>
+      <div class="jp">実行経路： <code>spine-seg</code> はオフライン事前検査とグリッド・ボクセル検証を通る。</div>
+      <div class="jpf"><ruby>実行経路<rt>じっこうけいろ</rt></ruby>： <code>spine-seg</code> はオフライン<ruby>事前検査<rt>じぜんけんさ</rt></ruby>とグリッド・ボクセル<ruby>検証<rt>けんしょう</rt></ruby>を<ruby>通<rt>とお</rt></ruby>る。</div>
       <div class="en"><b>Guarded run:</b> <code>spine-seg</code> applies a no-network preflight plus grid and voxel verification.</div>
     </div>
     <div class="entry" data-claim="guard-cohort-run">
-      <div class="jp">完走： 適格な 61 例はすべて終了コード 0 で、検証失敗はありませんでした。</div>
-      <div class="jpf"><ruby>完走<rt>かんそう</rt></ruby>： <ruby>適格<rt>てきかく</rt></ruby>な 61 <ruby>例<rt>れい</rt></ruby>はすべて<ruby>終了<rt>しゅうりょう</rt></ruby>コード 0 で、<ruby>検証失敗<rt>けんしょうしっぱい</rt></ruby>はありませんでした。</div>
+      <div class="jp">完走： 適格な 61 例はすべて終了コード 0 で、検証失敗はなかった。</div>
+      <div class="jpf"><ruby>完走<rt>かんそう</rt></ruby>： <ruby>適格<rt>てきかく</rt></ruby>な 61 <ruby>例<rt>れい</rt></ruby>はすべて<ruby>終了<rt>しゅうりょう</rt></ruby>コード 0 で、<ruby>検証失敗<rt>けんしょうしっぱい</rt></ruby>はなかった。</div>
       <div class="en"><b>Cohort run:</b> all 61 eligible cases exited 0 with no verification failure.</div>
     </div>
     <div class="entry" data-claim="guard-map-pin">
-      <div class="jp">ラベル対応： 予測時と採点時の双方で 25 レベルの対応表を照合します。</div>
-      <div class="jpf">ラベル<ruby>対応<rt>たいおう</rt></ruby>： <ruby>予測時<rt>よそくじ</rt></ruby>と<ruby>採点時<rt>さいてんじ</rt></ruby>の<ruby>双方<rt>そうほう</rt></ruby>で 25 レベルの<ruby>対応表<rt>たいおうひょう</rt></ruby>を<ruby>照合<rt>しょうごう</rt></ruby>します。</div>
+      <div class="jp">ラベル対応： 予測時と採点時の双方で 25 レベルの対応表を照合する。</div>
+      <div class="jpf">ラベル<ruby>対応<rt>たいおう</rt></ruby>： <ruby>予測時<rt>よそくじ</rt></ruby>と<ruby>採点時<rt>さいてんじ</rt></ruby>の<ruby>双方<rt>そうほう</rt></ruby>で 25 レベルの<ruby>対応表<rt>たいおうひょう</rt></ruby>を<ruby>照合<rt>しょうごう</rt></ruby>する。</div>
       <div class="en"><b>Map integrity:</b> the full 25-level crosswalk is pinned at prediction and scoring.</div>
     </div>
   </div>
@@ -128,18 +128,18 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
   <div class="eyebrow"><span class="n">03</span><span>採点設計 &nbsp;·&nbsp; scoring protocol</span></div>
   <div class="text-stack">
     <div class="entry" data-claim="protocol-eligibility">
-      <div class="jp">対象選択： GT マスクの L3 と T12 を基準に自動選別し、80 例中 61 例を採点しました。</div>
-      <div class="jpf"><ruby>対象選択<rt>たいしょうせんたく</rt></ruby>： GT マスクの L3 と T12 を<ruby>基準<rt>きじゅん</rt></ruby>に<ruby>自動選別<rt>じどうせんべつ</rt></ruby>し、80 <ruby>例中<rt>れいちゅう</rt></ruby> 61 <ruby>例<rt>れい</rt></ruby>を<ruby>採点<rt>さいてん</rt></ruby>しました。</div>
+      <div class="jp">対象選択： GT マスクの L3 と T12 を基準に自動選別し、80 例中 61 例を採点した。</div>
+      <div class="jpf"><ruby>対象選択<rt>たいしょうせんたく</rt></ruby>： GT マスクの L3 と T12 を<ruby>基準<rt>きじゅん</rt></ruby>に<ruby>自動選別<rt>じどうせんべつ</rt></ruby>し、80 <ruby>例中<rt>れいちゅう</rt></ruby> 61 <ruby>例<rt>れい</rt></ruby>を<ruby>採点<rt>さいてん</rt></ruby>した。</div>
       <div class="en"><b>Cohort:</b> presence of L3 and T12 in the GT mask selected 61 of 80 validation cases.</div>
     </div>
     <div class="entry" data-claim="protocol-aggregation">
-      <div class="jp">集約： 椎骨別 Dice から例別平均を求め、各例を同じ重みでコホート平均にします。</div>
-      <div class="jpf"><ruby>集約<rt>しゅうやく</rt></ruby>： <ruby>椎骨別<rt>ついこつべつ</rt></ruby> Dice から<ruby>例別平均<rt>れいべつへいきん</rt></ruby>を<ruby>求<rt>もと</rt></ruby>め、<ruby>各例<rt>かくれい</rt></ruby>を<ruby>同<rt>おな</rt></ruby>じ<ruby>重<rt>おも</rt></ruby>みでコホート<ruby>平均<rt>へいきん</rt></ruby>にします。</div>
+      <div class="jp">集約： 椎骨別 Dice から例別平均を求め、各例を同じ重みでコホート平均にする。</div>
+      <div class="jpf"><ruby>集約<rt>しゅうやく</rt></ruby>： <ruby>椎骨別<rt>ついこつべつ</rt></ruby> Dice から<ruby>例別平均<rt>れいべつへいきん</rt></ruby>を<ruby>求<rt>もと</rt></ruby>め、<ruby>各例<rt>かくれい</rt></ruby>を<ruby>同<rt>おな</rt></ruby>じ<ruby>重<rt>おも</rt></ruby>みでコホート<ruby>平均<rt>へいきん</rt></ruby>にする。</div>
       <div class="en"><b>Aggregation:</b> per-vertebra Dice → per-case mean → equally weighted cohort mean.</div>
     </div>
     <div class="entry" data-claim="protocol-empty">
-      <div class="jp">空の予測： GT に椎骨があり予測が空なら Dice 0、L6 / T13 は採点対象外です。</div>
-      <div class="jpf"><ruby>空<rt>から</rt></ruby>の<ruby>予測<rt>よそく</rt></ruby>： GT に<ruby>椎骨<rt>ついこつ</rt></ruby>があり<ruby>予測<rt>よそく</rt></ruby>が<ruby>空<rt>から</rt></ruby>なら Dice 0、L6 / T13 は<ruby>採点対象外<rt>さいてんたいしょうがい</rt></ruby>です。</div>
+      <div class="jp">空の予測： GT に椎骨があり予測が空なら Dice 0、L6 / T13 は採点対象外。</div>
+      <div class="jpf"><ruby>空<rt>から</rt></ruby>の<ruby>予測<rt>よそく</rt></ruby>： GT に<ruby>椎骨<rt>ついこつ</rt></ruby>があり<ruby>予測<rt>よそく</rt></ruby>が<ruby>空<rt>から</rt></ruby>なら Dice 0、L6 / T13 は<ruby>採点対象外<rt>さいてんたいしょうがい</rt></ruby>。</div>
       <div class="en"><b>Missing prediction:</b> a GT-present, prediction-empty vertebra scores 0; L6/T13 remain unscoreable.</div>
     </div>
   </div>
@@ -156,8 +156,8 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
         <div class="en"><b>Center:</b> mean of 61 per-case means = 0.8093; per-case median = 0.9176.</div>
       </div>
       <div class="entry" data-claim="result-thresholds">
-        <div class="jp">高得点： 35 例が 0.9 以上、43 例が 0.8 以上でした。</div>
-        <div class="jpf"><ruby>高得点<rt>こうとくてん</rt></ruby>： 35 <ruby>例<rt>れい</rt></ruby>が 0.9 <ruby>以上<rt>いじょう</rt></ruby>、43 <ruby>例<rt>れい</rt></ruby>が 0.8 <ruby>以上<rt>いじょう</rt></ruby>でした。</div>
+        <div class="jp">高得点： 35 例が 0.9 以上、43 例が 0.8 以上。</div>
+        <div class="jpf"><ruby>高得点<rt>こうとくてん</rt></ruby>： 35 <ruby>例<rt>れい</rt></ruby>が 0.9 <ruby>以上<rt>いじょう</rt></ruby>、43 <ruby>例<rt>れい</rt></ruby>が 0.8 <ruby>以上<rt>いじょう</rt></ruby>。</div>
         <div class="en"><b>High scores:</b> 35 cases reached ≥0.9; 43 reached ≥0.8.</div>
       </div>
       <div class="entry" data-claim="result-level-medians">
@@ -178,18 +178,18 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
   <div class="eyebrow"><span class="n">05</span><span>失敗パターン &nbsp;·&nbsp; failure pattern</span></div>
   <div class="text-stack">
     <div class="entry" data-claim="failure-tail-shape">
-      <div class="jp">分布の形： 平均が中央値を下回る差は、低得点側の尾部と整合します。</div>
-      <div class="jpf"><ruby>分布<rt>ぶんぷ</rt></ruby>の<ruby>形<rt>かたち</rt></ruby>： <ruby>平均<rt>へいきん</rt></ruby>が<ruby>中央値<rt>ちゅうおうち</rt></ruby>を<ruby>下回<rt>したまわ</rt></ruby>る<ruby>差<rt>さ</rt></ruby>は、<ruby>低得点側<rt>ていとくてんがわ</rt></ruby>の<ruby>尾部<rt>びぶ</rt></ruby>と<ruby>整合<rt>せいごう</rt></ruby>します。</div>
+      <div class="jp">分布の形： 平均が中央値を下回る差は、低得点側の尾部と整合する。</div>
+      <div class="jpf"><ruby>分布<rt>ぶんぷ</rt></ruby>の<ruby>形<rt>かたち</rt></ruby>： <ruby>平均<rt>へいきん</rt></ruby>が<ruby>中央値<rt>ちゅうおうち</rt></ruby>を<ruby>下回<rt>したまわ</rt></ruby>る<ruby>差<rt>さ</rt></ruby>は、<ruby>低得点側<rt>ていとくてんがわ</rt></ruby>の<ruby>尾部<rt>びぶ</rt></ruby>と<ruby>整合<rt>せいごう</rt></ruby>する。</div>
       <div class="en"><b>Distribution shape:</b> the mean–median gap is consistent with a low-score tail.</div>
     </div>
     <div class="entry" data-claim="failure-l4">
-      <div class="jp">腰椎 L4： 平均 0.658、標準偏差 0.409、中央値 0.937 でした。</div>
-      <div class="jpf"><ruby>腰椎<rt>ようつい</rt></ruby> L4： <ruby>平均<rt>へいきん</rt></ruby> 0.658、<ruby>標準偏差<rt>ひょうじゅんへんさ</rt></ruby> 0.409、<ruby>中央値<rt>ちゅうおうち</rt></ruby> 0.937 でした。</div>
+      <div class="jp">腰椎 L4： 平均 0.658、標準偏差 0.409、中央値 0.937。</div>
+      <div class="jpf"><ruby>腰椎<rt>ようつい</rt></ruby> L4： <ruby>平均<rt>へいきん</rt></ruby> 0.658、<ruby>標準偏差<rt>ひょうじゅんへんさ</rt></ruby> 0.409、<ruby>中央値<rt>ちゅうおうち</rt></ruby> 0.937。</div>
       <div class="en"><b>L4:</b> mean 0.658, SD 0.409, median 0.937.</div>
     </div>
     <div class="entry" data-claim="failure-label-drift">
-      <div class="jp">解釈： 低得点の尾部は、下方領域で連続するレベルずれと整合します。</div>
-      <div class="jpf"><ruby>解釈<rt>かいしゃく</rt></ruby>： <ruby>低得点<rt>ていとくてん</rt></ruby>の<ruby>尾部<rt>びぶ</rt></ruby>は、<ruby>下方領域<rt>かほうりょういき</rt></ruby>で<ruby>連続<rt>れんぞく</rt></ruby>するレベルずれと<ruby>整合<rt>せいごう</rt></ruby>します。</div>
+      <div class="jp">解釈： 低得点の尾部は、下方領域で連続するレベルずれと整合する。</div>
+      <div class="jpf"><ruby>解釈<rt>かいしゃく</rt></ruby>： <ruby>低得点<rt>ていとくてん</rt></ruby>の<ruby>尾部<rt>びぶ</rt></ruby>は、<ruby>下方領域<rt>かほうりょういき</rt></ruby>で<ruby>連続<rt>れんぞく</rt></ruby>するレベルずれと<ruby>整合<rt>せいごう</rt></ruby>する。</div>
       <div class="en"><b>Interpretation:</b> the low-score tail is consistent with sustained caudal/regional level drift.</div>
     </div>
   </div>
@@ -200,18 +200,18 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
   <div class="eyebrow"><span class="n">06</span><span>証拠の境界 &nbsp;·&nbsp; evidence boundary</span></div>
   <div class="text-stack">
     <div class="entry" data-claim="limit-native-grid">
-      <div class="jp">尺度： CT ネイティブ・グリッド上の内部指標で、VerSe 1 mm チャレンジ得点ではありません。</div>
-      <div class="jpf"><ruby>尺度<rt>しゃくど</rt></ruby>： CT ネイティブ・グリッド<ruby>上<rt>じょう</rt></ruby>の<ruby>内部指標<rt>ないぶしひょう</rt></ruby>で、VerSe 1 mm チャレンジ<ruby>得点<rt>とくてん</rt></ruby>ではありません。</div>
+      <div class="jp">尺度： CT ネイティブ・グリッド上の内部指標で、VerSe 1 mm チャレンジ得点ではない。</div>
+      <div class="jpf"><ruby>尺度<rt>しゃくど</rt></ruby>： CT ネイティブ・グリッド<ruby>上<rt>じょう</rt></ruby>の<ruby>内部指標<rt>ないぶしひょう</rt></ruby>で、VerSe 1 mm チャレンジ<ruby>得点<rt>とくてん</rt></ruby>ではない。</div>
       <div class="en"><b>Metric boundary:</b> this is internal CT-native-grid Dice, not the VerSe 1 mm challenge score.</div>
     </div>
     <div class="entry" data-claim="limit-missing-metrics">
-      <div class="jp">未測定： HD / NSD と同定率は M2 の対象外です。</div>
-      <div class="jpf"><ruby>未測定<rt>みそくてい</rt></ruby>： HD / NSD と<ruby>同定率<rt>どうていりつ</rt></ruby>は M2 の<ruby>対象外<rt>たいしょうがい</rt></ruby>です。</div>
+      <div class="jp">未測定： HD / NSD と同定率は M2 の対象外。</div>
+      <div class="jpf"><ruby>未測定<rt>みそくてい</rt></ruby>： HD / NSD と<ruby>同定率<rt>どうていりつ</rt></ruby>は M2 の<ruby>対象外<rt>たいしょうがい</rt></ruby>。</div>
       <div class="en"><b>Not measured:</b> HD/NSD surface metrics and identification rate are outside M2.</div>
     </div>
     <div class="entry gap" data-claim="gap-human-signoff">
-      <div class="jp">人の確認： 3D Slicer での視覚承認は、コミット済み資料では未確認です。</div>
-      <div class="jpf"><ruby>人<rt>ひと</rt></ruby>の<ruby>確認<rt>かくにん</rt></ruby>： 3D Slicer での<ruby>視覚承認<rt>しかくしょうにん</rt></ruby>は、コミット<ruby>済<rt>ず</rt></ruby>み<ruby>資料<rt>しりょう</rt></ruby>では<ruby>未確認<rt>みかくにん</rt></ruby>です。</div>
+      <div class="jp">人の確認： 3D Slicer での視覚承認は、コミット済み資料では未確認。</div>
+      <div class="jpf"><ruby>人<rt>ひと</rt></ruby>の<ruby>確認<rt>かくにん</rt></ruby>： 3D Slicer での<ruby>視覚承認<rt>しかくしょうにん</rt></ruby>は、コミット<ruby>済<rt>ず</rt></ruby>み<ruby>資料<rt>しりょう</rt></ruby>では<ruby>未確認<rt>みかくにん</rt></ruby>。</div>
       <div class="en"><b>Human confirmation:</b> 3D Slicer visual sign-off is not recorded in committed evidence.</div>
     </div>
   </div>

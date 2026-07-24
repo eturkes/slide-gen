@@ -86,18 +86,18 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
 <section class="slide slide--opening">
   <div class="eyebrow"><span class="n">01</span><span>研究の輪郭 &nbsp;·&nbsp; research frame</span></div>
   <div class="entry" data-claim="project-purpose">
-    <div class="jp">目的： 脊髄損傷リハビリのための、日本語・英語対応の分析・予測パイプラインです。</div>
-    <div class="jpf"><ruby>目的<rt>もくてき</rt></ruby>： <ruby>脊髄損傷<rt>せきずいそんしょう</rt></ruby>リハビリのための、<ruby>日本語<rt>にほんご</rt></ruby>・<ruby>英語<rt>えいご</rt></ruby><ruby>対応<rt>たいおう</rt></ruby>の<ruby>分析<rt>ぶんせき</rt></ruby>・<ruby>予測<rt>よそく</rt></ruby>パイプラインです。</div>
+    <div class="jp">目的： 脊髄損傷リハビリのための、日本語・英語対応の分析・予測パイプライン。</div>
+    <div class="jpf"><ruby>目的<rt>もくてき</rt></ruby>： <ruby>脊髄損傷<rt>せきずいそんしょう</rt></ruby>リハビリのための、<ruby>日本語<rt>にほんご</rt></ruby>・<ruby>英語<rt>えいご</rt></ruby><ruby>対応<rt>たいおう</rt></ruby>の<ruby>分析<rt>ぶんせき</rt></ruby>・<ruby>予測<rt>よそく</rt></ruby>パイプライン。</div>
     <div class="en"><b>Purpose:</b> a Japanese/English analytics and prediction pipeline for spinal-cord-injury rehabilitation.</div>
   </div>
   <div class="entry" data-claim="schema-driven-bilingual">
-    <div class="jp">二言語表示： 臨床ラベルと水準、画面文言は <code>schema/*.yaml</code> で管理されます。</div>
-    <div class="jpf"><ruby>二言語表示<rt>にげんごひょうじ</rt></ruby>： <ruby>臨床<rt>りんしょう</rt></ruby>ラベルと<ruby>水準<rt>すいじゅん</rt></ruby>、<ruby>画面文言<rt>がめんもんごん</rt></ruby>は <code>schema/*.yaml</code> で<ruby>管理<rt>かんり</rt></ruby>されます。</div>
+    <div class="jp">二言語表示： 臨床ラベルと水準、画面文言は <code>schema/*.yaml</code> で管理される。</div>
+    <div class="jpf"><ruby>二言語表示<rt>にげんごひょうじ</rt></ruby>： <ruby>臨床<rt>りんしょう</rt></ruby>ラベルと<ruby>水準<rt>すいじゅん</rt></ruby>、<ruby>画面文言<rt>がめんもんごん</rt></ruby>は <code>schema/*.yaml</code> で<ruby>管理<rt>かんり</rt></ruby>される。</div>
     <div class="en"><b>Bilingual rendering:</b> schema YAML drives clinical labels, factor levels, and UI strings.</div>
   </div>
   <div class="entry" data-claim="repo-privacy-boundary">
-    <div class="jp">公開範囲： コミット済みリポジトリは、コード、スキーマ、集計済みの記述統計のみで、患者単位データを含みません。</div>
-    <div class="jpf"><ruby>公開範囲<rt>こうかいはんい</rt></ruby>： コミット<ruby>済<rt>ず</rt></ruby>みリポジトリは、コード、スキーマ、<ruby>集計<rt>しゅうけい</rt></ruby><ruby>済<rt>ず</rt></ruby>みの<ruby>記述統計<rt>きじゅつとうけい</rt></ruby>のみで、<ruby>患者単位<rt>かんじゃたんい</rt></ruby>データを<ruby>含<rt>ふく</rt></ruby>みません。</div>
+    <div class="jp">公開範囲： コミット済みリポジトリは、コード、スキーマ、集計済みの記述統計のみで、患者単位データを含まない。</div>
+    <div class="jpf"><ruby>公開範囲<rt>こうかいはんい</rt></ruby>： コミット<ruby>済<rt>ず</rt></ruby>みリポジトリは、コード、スキーマ、<ruby>集計<rt>しゅうけい</rt></ruby><ruby>済<rt>ず</rt></ruby>みの<ruby>記述統計<rt>きじゅつとうけい</rt></ruby>のみで、<ruby>患者単位<rt>かんじゃたんい</rt></ruby>データを<ruby>含<rt>ふく</rt></ruby>まない。</div>
     <div class="en"><b>Repository boundary:</b> committed content is code, schema, and aggregate descriptive statistics - no row-level patient data.</div>
   </div>
   <div class="pageno">rehab · 1 / 6</div>
@@ -106,18 +106,18 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
 <section class="slide">
   <div class="eyebrow"><span class="n">02</span><span>データ形成 &nbsp;·&nbsp; data shaping</span></div>
   <div class="entry" data-claim="loader-normalization">
-    <div class="jp">データ入力： <code>cp932</code> で読み、<code>_ / NT / NA / ND</code> を欠損として正規化します。</div>
-    <div class="jpf">データ<ruby>入力<rt>にゅうりょく</rt></ruby>： <code>cp932</code> で<ruby>読<rt>よ</rt></ruby>み、<code>_ / NT / NA / ND</code> を<ruby>欠損<rt>けっそん</rt></ruby>として<ruby>正規化<rt>せいきか</rt></ruby>します。</div>
+    <div class="jp">データ入力： <code>cp932</code> で読み、<code>_ / NT / NA / ND</code> を欠損として正規化する。</div>
+    <div class="jpf">データ<ruby>入力<rt>にゅうりょく</rt></ruby>： <code>cp932</code> で<ruby>読<rt>よ</rt></ruby>み、<code>_ / NT / NA / ND</code> を<ruby>欠損<rt>けっそん</rt></ruby>として<ruby>正規化<rt>せいきか</rt></ruby>する。</div>
     <div class="en"><b>Ingest:</b> read <code>cp932</code> and normalize <code>_ / NT / NA / ND</code> as missing values.</div>
   </div>
   <div class="entry" data-claim="analysis-cohort">
-    <div class="jp">分析データ： 値のないプレースホルダー301件を除き、899エピソード・866人を扱います。</div>
-    <div class="jpf"><ruby>分析<rt>ぶんせき</rt></ruby>データ： <ruby>値<rt>あたい</rt></ruby>のないプレースホルダー301<ruby>件<rt>けん</rt></ruby>を<ruby>除<rt>のぞ</rt></ruby>き、899エピソード・866<ruby>人<rt>にん</rt></ruby>を<ruby>扱<rt>あつか</rt></ruby>います。</div>
+    <div class="jp">分析データ： 値のないプレースホルダー301件を除き、899エピソード・866人を扱う。</div>
+    <div class="jpf"><ruby>分析<rt>ぶんせき</rt></ruby>データ： <ruby>値<rt>あたい</rt></ruby>のないプレースホルダー301<ruby>件<rt>けん</rt></ruby>を<ruby>除<rt>のぞ</rt></ruby>き、899エピソード・866<ruby>人<rt>にん</rt></ruby>を<ruby>扱<rt>あつか</rt></ruby>う。</div>
     <div class="en"><b>Analysis frame:</b> after removing 301 empty placeholders, it covers 899 episodes from 866 people.</div>
   </div>
   <div class="entry" data-claim="admission-backfill">
-    <div class="jp">基準時点： 入院時特徴は <code>0day</code> を起点に、<code>72h → 2w → 4w</code> の順で最初の非欠損値を補います。</div>
-    <div class="jpf"><ruby>基準時点<rt>きじゅんじてん</rt></ruby>： <ruby>入院時特徴<rt>にゅういんじとくちょう</rt></ruby>は <code>0day</code> を<ruby>起点<rt>きてん</rt></ruby>に、<code>72h → 2w → 4w</code> の<ruby>順<rt>じゅん</rt></ruby>で<ruby>最初<rt>さいしょ</rt></ruby>の<ruby>非欠損値<rt>ひけっそんち</rt></ruby>を<ruby>補<rt>おぎな</rt></ruby>います。</div>
+    <div class="jp">基準時点： 入院時特徴は <code>0day</code> を起点に、<code>72h → 2w → 4w</code> の順で最初の非欠損値を補う。</div>
+    <div class="jpf"><ruby>基準時点<rt>きじゅんじてん</rt></ruby>： <ruby>入院時特徴<rt>にゅういんじとくちょう</rt></ruby>は <code>0day</code> を<ruby>起点<rt>きてん</rt></ruby>に、<code>72h → 2w → 4w</code> の<ruby>順<rt>じゅん</rt></ruby>で<ruby>最初<rt>さいしょ</rt></ruby>の<ruby>非欠損値<rt>ひけっそんち</rt></ruby>を<ruby>補<rt>おぎな</rt></ruby>う。</div>
     <div class="en"><b>Baseline:</b> start at <code>0day</code>, then take the first non-null value from <code>72h → 2w → 4w</code>.</div>
   </div>
   <div class="pageno">rehab · 2 / 6</div>
@@ -126,18 +126,18 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
 <section class="slide">
   <div class="eyebrow"><span class="n">03</span><span>予測設計 &nbsp;·&nbsp; prediction design</span></div>
   <div class="entry" data-claim="outcome-registry">
-    <div class="jp">予測対象： 11項目 — <code>SCIM-III</code> の4回帰、<code>ISNCSCI</code> 変化量の5回帰、退院 <code>AIS</code>、在院日数です。</div>
-    <div class="jpf"><ruby>予測対象<rt>よそくたいしょう</rt></ruby>： 11<ruby>項目<rt>こうもく</rt></ruby> — <code>SCIM-III</code> の4<ruby>回帰<rt>かいき</rt></ruby>、<code>ISNCSCI</code> <ruby>変化量<rt>へんかりょう</rt></ruby>の5<ruby>回帰<rt>かいき</rt></ruby>、<ruby>退院<rt>たいいん</rt></ruby> <code>AIS</code>、<ruby>在院日数<rt>ざいいんにっすう</rt></ruby>です。</div>
+    <div class="jp">予測対象： 11項目 — <code>SCIM-III</code> の4回帰、<code>ISNCSCI</code> 変化量の5回帰、退院 <code>AIS</code>、在院日数。</div>
+    <div class="jpf"><ruby>予測対象<rt>よそくたいしょう</rt></ruby>： 11<ruby>項目<rt>こうもく</rt></ruby> — <code>SCIM-III</code> の4<ruby>回帰<rt>かいき</rt></ruby>、<code>ISNCSCI</code> <ruby>変化量<rt>へんかりょう</rt></ruby>の5<ruby>回帰<rt>かいき</rt></ruby>、<ruby>退院<rt>たいいん</rt></ruby> <code>AIS</code>、<ruby>在院日数<rt>ざいいんにっすう</rt></ruby>。</div>
     <div class="en"><b>Targets:</b> 11 outcomes - four SCIM-III regressions, five ISNCSCI change regressions, discharge AIS, and length of stay.</div>
   </div>
   <div class="entry" data-claim="patient-group-split">
-    <div class="jp">分割： 患者でグループ化し、同じ人の複数エピソードが学習側と評価側にまたがる情報漏れを防ぎます。</div>
-    <div class="jpf"><ruby>分割<rt>ぶんかつ</rt></ruby>： <ruby>患者<rt>かんじゃ</rt></ruby>でグループ<ruby>化<rt>か</rt></ruby>し、<ruby>同<rt>おな</rt></ruby>じ<ruby>人<rt>ひと</rt></ruby>の<ruby>複数<rt>ふくすう</rt></ruby>エピソードが<ruby>学習側<rt>がくしゅうがわ</rt></ruby>と<ruby>評価側<rt>ひょうかがわ</rt></ruby>にまたがる<ruby>情報漏<rt>じょうほうも</rt></ruby>れを<ruby>防<rt>ふせ</rt></ruby>ぎます。</div>
+    <div class="jp">分割： 患者でグループ化し、同じ人の複数エピソードが学習側と評価側にまたがる情報漏れを防ぐ。</div>
+    <div class="jpf"><ruby>分割<rt>ぶんかつ</rt></ruby>： <ruby>患者<rt>かんじゃ</rt></ruby>でグループ<ruby>化<rt>か</rt></ruby>し、<ruby>同<rt>おな</rt></ruby>じ<ruby>人<rt>ひと</rt></ruby>の<ruby>複数<rt>ふくすう</rt></ruby>エピソードが<ruby>学習側<rt>がくしゅうがわ</rt></ruby>と<ruby>評価側<rt>ひょうかがわ</rt></ruby>にまたがる<ruby>情報漏<rt>じょうほうも</rt></ruby>れを<ruby>防<rt>ふせ</rt></ruby>ぐ。</div>
     <div class="en"><b>Splitting:</b> group by patient so one person's episodes do not leak across development and evaluation.</div>
   </div>
   <div class="entry" data-claim="conformal-interval">
-    <div class="jp">不確実性： 開発集合の20%でキャリブレーションし、絶対残差の80%分位から回帰の予測区間を作ります。</div>
-    <div class="jpf"><ruby>不確実性<rt>ふかくじつせい</rt></ruby>： <ruby>開発集合<rt>かいはつしゅうごう</rt></ruby>の20%でキャリブレーションし、<ruby>絶対残差<rt>ぜったいざんさ</rt></ruby>の80%<ruby>分位<rt>ぶんい</rt></ruby>から<ruby>回帰<rt>かいき</rt></ruby>の<ruby>予測区間<rt>よそくくかん</rt></ruby>を<ruby>作<rt>つく</rt></ruby>ります。</div>
+    <div class="jp">不確実性： 開発集合の20%でキャリブレーションし、絶対残差の80%分位から回帰の予測区間を作る。</div>
+    <div class="jpf"><ruby>不確実性<rt>ふかくじつせい</rt></ruby>： <ruby>開発集合<rt>かいはつしゅうごう</rt></ruby>の20%でキャリブレーションし、<ruby>絶対残差<rt>ぜったいざんさ</rt></ruby>の80%<ruby>分位<rt>ぶんい</rt></ruby>から<ruby>回帰<rt>かいき</rt></ruby>の<ruby>予測区間<rt>よそくくかん</rt></ruby>を<ruby>作<rt>つく</rt></ruby>る。</div>
     <div class="en"><b>Uncertainty:</b> calibrate on 20% of development data and derive regression intervals from the 80th percentile of absolute residuals.</div>
   </div>
   <div class="pageno">rehab · 3 / 6</div>
@@ -146,18 +146,18 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
 <section class="slide">
   <div class="eyebrow"><span class="n">04</span><span>利用面 &nbsp;·&nbsp; user surfaces</span></div>
   <div class="entry" data-claim="dashboard-five-tabs">
-    <div class="jp">画面： コホート、シミュレータ、患者、洞察、方法の5タブを切り替えます。</div>
-    <div class="jpf"><ruby>画面<rt>がめん</rt></ruby>： コホート、シミュレータ、<ruby>患者<rt>かんじゃ</rt></ruby>、<ruby>洞察<rt>どうさつ</rt></ruby>、<ruby>方法<rt>ほうほう</rt></ruby>の5タブを<ruby>切<rt>き</rt></ruby>り<ruby>替<rt>か</rt></ruby>えます。</div>
+    <div class="jp">画面： コホート、シミュレータ、患者、洞察、方法の5タブを切り替える。</div>
+    <div class="jpf"><ruby>画面<rt>がめん</rt></ruby>： コホート、シミュレータ、<ruby>患者<rt>かんじゃ</rt></ruby>、<ruby>洞察<rt>どうさつ</rt></ruby>、<ruby>方法<rt>ほうほう</rt></ruby>の5タブを<ruby>切<rt>き</rt></ruby>り<ruby>替<rt>か</rt></ruby>える。</div>
     <div class="en"><b>Surfaces:</b> five tabs cover cohort overview, simulator, patient view, insights, and methods.</div>
   </div>
   <div class="entry" data-claim="bilingual-ui-refresh">
-    <div class="jp">言語： 一つの設定でラベル、軸、ホバー、タブ、選択肢を日本語・英語に再描画します。</div>
-    <div class="jpf"><ruby>言語<rt>げんご</rt></ruby>： <ruby>一<rt>ひと</rt></ruby>つの<ruby>設定<rt>せってい</rt></ruby>でラベル、<ruby>軸<rt>じく</rt></ruby>、ホバー、タブ、<ruby>選択肢<rt>せんたくし</rt></ruby>を<ruby>日本語<rt>にほんご</rt></ruby>・<ruby>英語<rt>えいご</rt></ruby>に<ruby>再描画<rt>さいびょうが</rt></ruby>します。</div>
+    <div class="jp">言語： 一つの設定でラベル、軸、ホバー、タブ、選択肢を日本語・英語に再描画する。</div>
+    <div class="jpf"><ruby>言語<rt>げんご</rt></ruby>： <ruby>一<rt>ひと</rt></ruby>つの<ruby>設定<rt>せってい</rt></ruby>でラベル、<ruby>軸<rt>じく</rt></ruby>、ホバー、タブ、<ruby>選択肢<rt>せんたくし</rt></ruby>を<ruby>日本語<rt>にほんご</rt></ruby>・<ruby>英語<rt>えいご</rt></ruby>に<ruby>再描画<rt>さいびょうが</rt></ruby>する。</div>
     <div class="en"><b>Language:</b> one setting redraws labels, axes, hovers, tabs, and options in Japanese or English.</div>
   </div>
   <div class="entry" data-claim="sparse-input-reliability">
-    <div class="jp">信頼性表示： 入力充足度と分布外信号を別に示します。入力が少なくても、キャリブレーション区間自体は広がりません。</div>
-    <div class="jpf"><ruby>信頼性表示<rt>しんらいせいひょうじ</rt></ruby>： <ruby>入力充足度<rt>にゅうりょくじゅうそくど</rt></ruby>と<ruby>分布外信号<rt>ぶんぷがいしんごう</rt></ruby>を<ruby>別<rt>べつ</rt></ruby>に<ruby>示<rt>しめ</rt></ruby>します。<ruby>入力<rt>にゅうりょく</rt></ruby>が<ruby>少<rt>すく</rt></ruby>なくても、キャリブレーション<ruby>区間自体<rt>くかんじたい</rt></ruby>は<ruby>広<rt>ひろ</rt></ruby>がりません。</div>
+    <div class="jp">信頼性表示： 入力充足度と分布外信号を別に示す。入力が少なくても、キャリブレーション区間自体は広がらない。</div>
+    <div class="jpf"><ruby>信頼性表示<rt>しんらいせいひょうじ</rt></ruby>： <ruby>入力充足度<rt>にゅうりょくじゅうそくど</rt></ruby>と<ruby>分布外信号<rt>ぶんぷがいしんごう</rt></ruby>を<ruby>別<rt>べつ</rt></ruby>に<ruby>示<rt>しめ</rt></ruby>す。<ruby>入力<rt>にゅうりょく</rt></ruby>が<ruby>少<rt>すく</rt></ruby>なくても、キャリブレーション<ruby>区間自体<rt>くかんじたい</rt></ruby>は<ruby>広<rt>ひろ</rt></ruby>がらない。</div>
     <div class="en"><b>Reliability cue:</b> completeness and out-of-distribution signals are separate; the fixed calibrated interval does not widen for sparse input.</div>
   </div>
   <div class="pageno">rehab · 4 / 6</div>
@@ -168,13 +168,13 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
   <div class="cols cols--quality">
     <div class="col-text">
       <div class="entry" data-claim="quality-rule-scope">
-        <div class="jp">検査： ドメイン、項目間、縦断の矛盾を調べ、必要な値がそろわない場合は違反としません。</div>
-        <div class="jpf"><ruby>検査<rt>けんさ</rt></ruby>： ドメイン、<ruby>項目間<rt>こうもくかん</rt></ruby>、<ruby>縦断<rt>じゅうだん</rt></ruby>の<ruby>矛盾<rt>むじゅん</rt></ruby>を<ruby>調<rt>しら</rt></ruby>べ、<ruby>必要<rt>ひつよう</rt></ruby>な<ruby>値<rt>あたい</rt></ruby>がそろわない<ruby>場合<rt>ばあい</rt></ruby>は<ruby>違反<rt>いはん</rt></ruby>としません。</div>
+        <div class="jp">検査： ドメイン、項目間、縦断の矛盾を調べ、必要な値がそろわない場合は違反としない。</div>
+        <div class="jpf"><ruby>検査<rt>けんさ</rt></ruby>： ドメイン、<ruby>項目間<rt>こうもくかん</rt></ruby>、<ruby>縦断<rt>じゅうだん</rt></ruby>の<ruby>矛盾<rt>むじゅん</rt></ruby>を<ruby>調<rt>しら</rt></ruby>べ、<ruby>必要<rt>ひつよう</rt></ruby>な<ruby>値<rt>あたい</rt></ruby>がそろわない<ruby>場合<rt>ばあい</rt></ruby>は<ruby>違反<rt>いはん</rt></ruby>としない。</div>
         <div class="en"><b>Checks:</b> domain, cross-field, and longitudinal contradictions; missing prerequisites never count as violations.</div>
       </div>
       <div class="entry" data-claim="quality-review-interpretation">
-        <div class="jp">解釈： これは確定した誤り数ではなく、学習に使わないレビュー候補の集計とみなします。</div>
-        <div class="jpf"><ruby>解釈<rt>かいしゃく</rt></ruby>： これは<ruby>確定<rt>かくてい</rt></ruby>した<ruby>誤<rt>あやま</rt></ruby>り<ruby>数<rt>すう</rt></ruby>ではなく、<ruby>学習<rt>がくしゅう</rt></ruby>に<ruby>使<rt>つか</rt></ruby>わないレビュー<ruby>候補<rt>こうほ</rt></ruby>の<ruby>集計<rt>しゅうけい</rt></ruby>とみなします。</div>
+        <div class="jp">解釈： これは確定した誤り数ではなく、学習に使わないレビュー候補の集計とみなす。</div>
+        <div class="jpf"><ruby>解釈<rt>かいしゃく</rt></ruby>： これは<ruby>確定<rt>かくてい</rt></ruby>した<ruby>誤<rt>あやま</rt></ruby>り<ruby>数<rt>すう</rt></ruby>ではなく、<ruby>学習<rt>がくしゅう</rt></ruby>に<ruby>使<rt>つか</rt></ruby>わないレビュー<ruby>候補<rt>こうほ</rt></ruby>の<ruby>集計<rt>しゅうけい</rt></ruby>とみなす。</div>
         <div class="en"><b>Interpretation:</b> treat these as aggregate review candidates, not adjudicated errors; they do not feed training.</div>
       </div>
     </div>
@@ -188,18 +188,18 @@ rt{font-size:var(--rt); font-weight:400; color:var(--sub); line-height:1;
 <section class="slide slide--decision">
   <div class="eyebrow"><span class="n">06</span><span>判断境界 &nbsp;·&nbsp; decision boundary</span></div>
   <div class="entry" data-claim="external-validation-gap">
-    <div class="jp">要確認： 外部・前向き検証が完了したかは、コミット済み資料では確認できません。</div>
-    <div class="jpf"><ruby>要確認<rt>ようかくにん</rt></ruby>： <ruby>外部<rt>がいぶ</rt></ruby>・<ruby>前向<rt>まえむ</rt></ruby>き<ruby>検証<rt>けんしょう</rt></ruby>が<ruby>完了<rt>かんりょう</rt></ruby>したかは、コミット<ruby>済<rt>ず</rt></ruby>み<ruby>資料<rt>しりょう</rt></ruby>では<ruby>確認<rt>かくにん</rt></ruby>できません。</div>
+    <div class="jp">要確認： 外部・前向き検証が完了したかは、コミット済み資料では確認できない。</div>
+    <div class="jpf"><ruby>要確認<rt>ようかくにん</rt></ruby>： <ruby>外部<rt>がいぶ</rt></ruby>・<ruby>前向<rt>まえむ</rt></ruby>き<ruby>検証<rt>けんしょう</rt></ruby>が<ruby>完了<rt>かんりょう</rt></ruby>したかは、コミット<ruby>済<rt>ず</rt></ruby>み<ruby>資料<rt>しりょう</rt></ruby>では<ruby>確認<rt>かくにん</rt></ruby>できない。</div>
     <div class="en"><b>Human check:</b> committed sources do not establish completed external or prospective validation.</div>
   </div>
   <div class="entry" data-claim="adjudication-gap">
-    <div class="jp">要確認： ルール検出ごとの真偽と修正状況は、権限を持つ担当者の確認が必要です。</div>
-    <div class="jpf"><ruby>要確認<rt>ようかくにん</rt></ruby>： ルール<ruby>検出<rt>けんしゅつ</rt></ruby>ごとの<ruby>真偽<rt>しんぎ</rt></ruby>と<ruby>修正状況<rt>しゅうせいじょうきょう</rt></ruby>は、<ruby>権限<rt>けんげん</rt></ruby>を<ruby>持<rt>も</rt></ruby>つ<ruby>担当者<rt>たんとうしゃ</rt></ruby>の<ruby>確認<rt>かくにん</rt></ruby>が<ruby>必要<rt>ひつよう</rt></ruby>です。</div>
+    <div class="jp">要確認： ルール検出ごとの真偽と修正状況は、権限を持つ担当者の確認が必要。</div>
+    <div class="jpf"><ruby>要確認<rt>ようかくにん</rt></ruby>： ルール<ruby>検出<rt>けんしゅつ</rt></ruby>ごとの<ruby>真偽<rt>しんぎ</rt></ruby>と<ruby>修正状況<rt>しゅうせいじょうきょう</rt></ruby>は、<ruby>権限<rt>けんげん</rt></ruby>を<ruby>持<rt>も</rt></ruby>つ<ruby>担当者<rt>たんとうしゃ</rt></ruby>の<ruby>確認<rt>かくにん</rt></ruby>が<ruby>必要<rt>ひつよう</rt></ruby>。</div>
     <div class="en"><b>Human check:</b> an authorized reviewer must adjudicate each flag and confirm correction status.</div>
   </div>
   <div class="entry" data-claim="internal-license">
-    <div class="jp">利用条件： 現時点では内部研究コードで、公開ライセンスはありません。</div>
-    <div class="jpf"><ruby>利用条件<rt>りようじょうけん</rt></ruby>： <ruby>現時点<rt>げんじてん</rt></ruby>では<ruby>内部研究<rt>ないぶけんきゅう</rt></ruby>コードで、<ruby>公開<rt>こうかい</rt></ruby>ライセンスはありません。</div>
+    <div class="jp">利用条件： 現時点では内部研究コードで、公開ライセンスはない。</div>
+    <div class="jpf"><ruby>利用条件<rt>りようじょうけん</rt></ruby>： <ruby>現時点<rt>げんじてん</rt></ruby>では<ruby>内部研究<rt>ないぶけんきゅう</rt></ruby>コードで、<ruby>公開<rt>こうかい</rt></ruby>ライセンスはない。</div>
     <div class="en"><b>Use terms:</b> this is internal research code with no public license at present.</div>
   </div>
   <div class="pageno">rehab · 6 / 6</div>

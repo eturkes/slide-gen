@@ -14,6 +14,7 @@ Cross-session context + learned facts (agent-agnostic). Record only what git log
 - `figures.py`: matplotlib figures from COMMITTED numbers; reads no `data/`, no PHI. `figure_example.py`: reads the Read-denied `data/` tree → a HUMAN runs it once, the PNG is committed (raw-data figures can't be agent-generated under deny rules).
 - Assets may carry non-Apache licenses (e.g. CC BY-SA from source datasets) → per-asset caption attribution. Render intermediates (`page_*.png`, `_deck_full.png`) gitignored.
 - Provenance: every number traces to project run-notes → M2 should cite sources + emit a gaps list (low-hallucination).
+- Japanese register (owner directive): decks + `templates/deck.html` use plain 常体 slide style (dictionary-form verbs + 体言止め), NEVER teineigo (です・ます); `templates/deck-prompt.md` mandates it. When editing/generating JA tiers, change only sentence-final endings — readings/`<rt>`/ruby bases stay fixed so strip-`<rt>`(`.jpf`) == `.jp` holds.
 
 ## MoonBit reference (native; pre-1.0 — verified at M1.1)
 - Install: `curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash` → `~/.moon/bin` (moon, moonc, moon-lsp, moonrun…); NOT on non-interactive PATH → `export PATH="$HOME/.moon/bin:$PATH"` per Bash call, or drive via `just` (justfile prepends it). Pin via `MOONBIT_INSTALL_VERSION=<v>` or installer arg 1 (default `latest`); record exact via `moon version --all`. Native needs cc (build-essential ✓, x86_64).
